@@ -12,7 +12,7 @@ textColor = "#111827"
 font = "sans"
 
 [server]
-headless = false
+headless = true
 
 [browser]
 gatherUsageStats = false
