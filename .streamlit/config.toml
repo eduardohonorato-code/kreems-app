@@ -3,11 +3,11 @@ base = "light"
 
 primaryColor = "#c4007a"
 
-backgroundColor = "#f4eefa"
+backgroundColor = "#F7F8FA"
 
-secondaryBackgroundColor = "#e8d4f5"
+secondaryBackgroundColor = "#18112E"
 
-textColor = "#111827"
+textColor = "#0F172A"
 
 font = "sans"
 

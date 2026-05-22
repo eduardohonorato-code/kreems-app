@@ -52,12 +52,12 @@ cols = st.columns(5)
 for col, (icono, titulo, desc, path) in zip(cols, cards):
     with col:
         st.markdown(f"""
-        <div style="background:#fff;border:1px solid #ddc8f0;border-radius:14px;
+        <div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:14px;
                     padding:22px 20px;height:160px;
-                    box-shadow:0 2px 10px rgba(100,40,160,0.08);">
+                    box-shadow:0 1px 4px rgba(0,0,0,0.06);">
             <div style="font-size:2rem;margin-bottom:10px;">{icono}</div>
-            <div style="font-size:15px;font-weight:700;color:#2d0050;margin-bottom:8px;">{titulo}</div>
-            <div style="font-size:12px;color:#888;line-height:1.5;">{desc}</div>
+            <div style="font-size:15px;font-weight:700;color:#0F172A;margin-bottom:8px;">{titulo}</div>
+            <div style="font-size:12px;color:#94A3B8;line-height:1.5;">{desc}</div>
         </div>
         """, unsafe_allow_html=True)
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
