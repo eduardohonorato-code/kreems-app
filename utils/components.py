@@ -281,17 +281,9 @@ def selector_meses(key: str = "mes", default: str = "Mayo") -> tuple:
             st.session_state[k_hasta] = mes_actual_nm
             st.rerun()
 
-    # Label del período activo
+    # Espacio reservado para el label (se rellena después con st.empty)
     with cols_row1[n + 2]:
-        if desde_act == hasta_act:
-            periodo_txt = f"{desde_act} 2026"
-        else:
-            periodo_txt = f"{desde_act} – {hasta_act} 2026"
-        st.markdown(
-            f"<div style='padding-top:26px;font-size:13px;color:#c4007a;"
-            f"font-weight:600;'>📅 {periodo_txt}</div>",
-            unsafe_allow_html=True
-        )
+        label_placeholder = st.empty()
 
     # ── Fila 2: rango personalizado Desde / Hasta ──────────────
     col_lbl, col_desde, col_arrow, col_hasta, col_spacer = \
@@ -321,6 +313,14 @@ def selector_meses(key: str = "mes", default: str = "Mayo") -> tuple:
     if meses_lista.index(hasta) < meses_lista.index(desde):
         hasta = desde
         st.session_state[k_hasta] = desde
+
+    # Label con valores finales correctos (después de leer los selectboxes)
+    periodo_txt = desde if desde == hasta else f"{desde} – {hasta}"
+    label_placeholder.markdown(
+        f"<div style='padding-top:26px;font-size:13px;color:#c4007a;"
+        f"font-weight:600;'>📅 {periodo_txt} 2026</div>",
+        unsafe_allow_html=True
+    )
 
     return (MESES_PERIODOS[desde], MESES_PERIODOS[hasta])
 
