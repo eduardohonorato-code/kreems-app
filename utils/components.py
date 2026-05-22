@@ -167,7 +167,7 @@ def selector_meses(key: str = "mes", default: str = "Mayo") -> tuple:
                 st.rerun()
 
     if mes_actual == "YTD":
-        return ("2026-01", "2026-12")
+        return ("2026-01", f"2026-{MES_NUM_ACTUAL:02d}")
     else:
         p = MESES_PERIODOS[mes_actual]
         return (p, p)
