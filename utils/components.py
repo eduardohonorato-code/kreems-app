@@ -378,7 +378,7 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
         <div style="text-align:center; padding:20px 0 14px;">
             {_logo_html(altura=44)}
             <div style="color:rgba(255,255,255,0.38); font-size:11px; margin-top:8px; letter-spacing:0.3px;">
-                Control Presupuestario 2026
+                Control Presupuestario {ANO_FISCAL}
             </div>
         </div>
         """, unsafe_allow_html=True)
@@ -402,7 +402,8 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
             <div style="font-size:9px; color:rgba(255,255,255,0.3); font-weight:700; letter-spacing:1.5px;
                         padding:10px 4px 4px; text-transform:uppercase;">ADMINISTRACIÓN</div>
             """, unsafe_allow_html=True)
-            st.page_link("pages/5_cargar_datos.py", label="⬆️  Cargar Datos", use_container_width=True)
+            st.page_link("pages/5_cargar_datos.py",    label="⬆️  Cargar Datos",     use_container_width=True)
+            st.page_link("pages/7_admin_usuarios.py", label="👤  Admin Usuarios",   use_container_width=True)
 
         st.markdown("<hr style='border:none; border-top:1px solid rgba(255,255,255,0.08); margin:14px 0;'>",
                     unsafe_allow_html=True)
