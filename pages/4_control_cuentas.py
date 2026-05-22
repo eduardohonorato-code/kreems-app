@@ -55,10 +55,10 @@ df_det["pct"] = df_det.apply(
               (float("inf") if r["real"] else 0), axis=1
 )
 
-# ── FILTROS Y ORDENAMIENTO ────────────────────────────────────────────────
-col_bus, col_cc_fil, col_cls_fil, col_sort, col_dir = st.columns([2.2, 1.1, 1.1, 1.3, 0.9])
+# ── FILTROS ────────────────────────────────────────────────────────────────
+col_bus, col_cc_fil, col_cls_fil = st.columns([2, 1, 1])
 with col_bus:
-    busqueda = st.text_input("Buscar cuenta...", placeholder="🔍  Buscar cuenta...",
+    busqueda = st.text_input("Buscar cuenta...", placeholder="Ej: honorarios, combustible...",
                              label_visibility="collapsed")
 with col_cc_fil:
     opciones_cc = {"Todos los CC": None}
@@ -69,14 +69,6 @@ with col_cc_fil:
 with col_cls_fil:
     clasifs = ["Todas"] + sorted(df_det["clasificacion"].dropna().unique().tolist())
     clasif_filtro = st.selectbox("Clasificación", clasifs, label_visibility="collapsed")
-with col_sort:
-    _SORT_OPTS = {"% Ejec.": "pct", "Varianza": "variacion", "Real": "real",
-                  "Presupuesto": "ppto", "Cuenta": "nombre_cuenta"}
-    sort_label = st.selectbox("Ordenar por", list(_SORT_OPTS.keys()),
-                              key="sort_col_cuentas", label_visibility="collapsed")
-with col_dir:
-    sort_asc = st.selectbox("Dir.", ["↓ Mayor", "↑ Menor"],
-                            key="sort_dir_cuentas", label_visibility="collapsed") == "↑ Menor"
 
 # Aplicar filtros
 df_fil = df_det.copy()
@@ -100,9 +92,6 @@ df_agg["pct"] = df_agg.apply(
     lambda r: (r["real"] / r["ppto"] * 100) if r["ppto"] else
               (float("inf") if r["real"] else 0), axis=1
 )
-
-# Aplicar ordenamiento (la fila TOTAL siempre al final)
-df_agg = df_agg.sort_values(_SORT_OPTS[sort_label], ascending=sort_asc, ignore_index=True)
 
 # ── KPI CARDS ─────────────────────────────────────────────────────────────
 n_cuentas    = len(df_agg)

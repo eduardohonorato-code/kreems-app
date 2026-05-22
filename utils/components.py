@@ -226,73 +226,81 @@ def header(titulo: str):
 
 def selector_meses(key: str = "mes", default: str = "Mayo") -> tuple:
     """
-    Selector de meses con etiquetas CERRADO / ACTUAL / PROYECTADO.
+    Selector de rango de meses: Desde / Hasta + atajos YTD y Mes actual.
     Retorna (periodo_desde, periodo_hasta) en formato 'YYYY-MM'.
     """
-    if f"mes_{key}" not in st.session_state:
-        st.session_state[f"mes_{key}"] = default
+    meses_lista   = list(MESES.values())          # ["Enero", ..., "Diciembre"]
+    mes_actual_nm = MESES[MES_NUM_ACTUAL]          # nombre del mes actual
 
-    mes_actual = st.session_state[f"mes_{key}"]
+    # Inicializar valores por defecto en session_state (solo primera vez)
+    if f"_sm_{key}_desde" not in st.session_state:
+        st.session_state[f"_sm_{key}_desde"] = default
+    if f"_sm_{key}_hasta" not in st.session_state:
+        st.session_state[f"_sm_{key}_hasta"] = default
 
-    # CSS botones compactos
-    st.markdown("""
-    <style>
-        div[data-testid="column"] button {
-            width: 100% !important;
-            padding: 4px 2px !important;
-            font-size: 10px !important;
-            white-space: nowrap !important;
-            overflow: hidden !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
+    # ── Layout ────────────────────────────────────────────────
+    col_lbl, col_desde, col_arrow, col_hasta, col_gap, col_ytd, col_act = \
+        st.columns([0.55, 1.35, 0.12, 1.35, 0.6, 0.58, 0.95])
 
-    # Fila de etiquetas de estado
-    col_lbl_ytd, *cols_lbl = st.columns([0.8] + [1] * 12)
-    with col_lbl_ytd:
+    with col_lbl:
         st.markdown(
-            "<div style='font-size:8px; color:#aaa; text-align:center; "
-            "font-weight:700; letter-spacing:0.5px; padding-bottom:1px;'>ACUM.</div>",
+            "<div style='padding-top:7px; font-size:13px; color:#64748B; font-weight:500;'>"
+            "Período</div>",
             unsafe_allow_html=True
         )
-    for i, (num, _) in enumerate(MESES.items()):
-        lbl, color, icono = _estado_mes(num)
-        with cols_lbl[i]:
-            st.markdown(
-                f"<div style='font-size:8px; color:{color}; text-align:center; "
-                f"font-weight:700; letter-spacing:0.3px; padding-bottom:1px;'>"
-                f"{icono} {lbl}</div>",
-                unsafe_allow_html=True
-            )
 
-    # Fila de botones
-    col_ytd, *cols_meses = st.columns([0.8] + [1] * 12)
+    with col_desde:
+        st.markdown(
+            "<div style='font-size:10px; color:#94A3B8; margin-bottom:1px;'>Desde</div>",
+            unsafe_allow_html=True
+        )
+        desde = st.selectbox(
+            "Desde", meses_lista,
+            index=meses_lista.index(st.session_state[f"_sm_{key}_desde"]),
+            key=f"_sm_{key}_desde",
+            label_visibility="collapsed"
+        )
+
+    with col_arrow:
+        st.markdown(
+            "<div style='padding-top:26px; text-align:center; color:#CBD5E1; font-size:14px;'>→</div>",
+            unsafe_allow_html=True
+        )
+
+    with col_hasta:
+        st.markdown(
+            "<div style='font-size:10px; color:#94A3B8; margin-bottom:1px;'>Hasta</div>",
+            unsafe_allow_html=True
+        )
+        hasta = st.selectbox(
+            "Hasta", meses_lista,
+            index=meses_lista.index(st.session_state[f"_sm_{key}_hasta"]),
+            key=f"_sm_{key}_hasta",
+            label_visibility="collapsed"
+        )
+
     with col_ytd:
-        if st.button(
-            "YTD",
-            key=f"btn_mes_{key}_ytd",
-            type="primary" if mes_actual == "YTD" else "secondary",
-            use_container_width=True
-        ):
-            st.session_state[f"mes_{key}"] = "YTD"
+        st.markdown("<div style='font-size:10px; color:transparent; margin-bottom:1px;'>.</div>",
+                    unsafe_allow_html=True)
+        if st.button("YTD", key=f"_sm_{key}_btn_ytd", use_container_width=True):
+            st.session_state[f"_sm_{key}_desde"] = "Enero"
+            st.session_state[f"_sm_{key}_hasta"] = mes_actual_nm
             st.rerun()
 
-    for i, (num, nombre) in enumerate(MESES.items()):
-        with cols_meses[i]:
-            if st.button(
-                nombre[:3],
-                key=f"btn_mes_{key}_{num}",
-                type="primary" if nombre == mes_actual else "secondary",
-                use_container_width=True
-            ):
-                st.session_state[f"mes_{key}"] = nombre
-                st.rerun()
+    with col_act:
+        st.markdown("<div style='font-size:10px; color:transparent; margin-bottom:1px;'>.</div>",
+                    unsafe_allow_html=True)
+        if st.button("Mes actual", key=f"_sm_{key}_btn_act", use_container_width=True):
+            st.session_state[f"_sm_{key}_desde"] = mes_actual_nm
+            st.session_state[f"_sm_{key}_hasta"] = mes_actual_nm
+            st.rerun()
 
-    if mes_actual == "YTD":
-        return ("2026-01", f"2026-{MES_NUM_ACTUAL:02d}")
-    else:
-        p = MESES_PERIODOS[mes_actual]
-        return (p, p)
+    # Validar: si hasta < desde, igualar hasta = desde
+    if meses_lista.index(hasta) < meses_lista.index(desde):
+        hasta = desde
+        st.caption("⚠ El mes 'Hasta' no puede ser anterior al 'Desde' — se igualaron automáticamente.")
+
+    return (MESES_PERIODOS[desde], MESES_PERIODOS[hasta])
 
 
 # ── KPI CARD ──────────────────────────────────────────────────
