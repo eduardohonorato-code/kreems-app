@@ -3,9 +3,9 @@ base = "light"
 
 primaryColor = "#c4007a"
 
-backgroundColor = "#ffffff"
+backgroundColor = "#f4eefa"
 
-secondaryBackgroundColor = "#f7f8fa"
+secondaryBackgroundColor = "#e8d4f5"
 
 textColor = "#111827"
 

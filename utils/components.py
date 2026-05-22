@@ -24,6 +24,47 @@ def inject_font():
             font-variant-ligatures: none !important;
             font-feature-settings: "liga" 0, "clig" 0 !important;
         }
+
+        /* ── Sidebar refinado ── */
+        [data-testid="stSidebar"] {
+            border-right: 1px solid #d0a8e8 !important;
+        }
+
+        /* Links de navegación en sidebar */
+        [data-testid="stSidebar"] [data-testid="stPageLink"] a,
+        [data-testid="stSidebar"] [data-testid="stPageLink"] p {
+            color: #3d0060 !important;
+            font-weight: 500 !important;
+            font-size: 13.5px !important;
+        }
+        [data-testid="stSidebar"] [data-testid="stPageLink"]:hover a,
+        [data-testid="stSidebar"] [data-testid="stPageLink"]:hover p {
+            color: #c4007a !important;
+        }
+
+        /* Botón cerrar sesión */
+        [data-testid="stSidebar"] .stButton button {
+            background: transparent !important;
+            border: 1px solid #c4a0e0 !important;
+            color: #3d0060 !important;
+            font-size: 13px !important;
+        }
+        [data-testid="stSidebar"] .stButton button:hover {
+            background: #d4a8ee !important;
+            border-color: #a060cc !important;
+            color: #2d0050 !important;
+        }
+
+        /* Radio buttons en sidebar */
+        [data-testid="stSidebar"] .stRadio label {
+            color: #3d0060 !important;
+            font-size: 13px !important;
+        }
+
+        /* Main content: tarjetas blancas sobre fondo lavanda */
+        [data-testid="stAppViewContainer"] > .main {
+            background: #f4eefa !important;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -88,8 +129,8 @@ def header(titulo: str):
         display: flex;
         align-items: center;
         justify-content: space-between;
-        background: linear-gradient(90deg, #fff 0%, #fdf5fb 100%);
-        border-bottom: 2px solid #f0c0e0;
+        background: linear-gradient(90deg, #f4eefa 0%, #edd5f8 100%);
+        border-bottom: 2px solid #d4a0e8;
         padding: 12px 24px;
         margin: -1rem -1rem 1.5rem -1rem;
     ">
@@ -203,8 +244,9 @@ def kpi_card(label: str, valor: float, referencia: float = None,
         sub_html = ""
 
     st.markdown(f"""
-    <div style="background:#fff; border:1px solid #f0dff0; border-radius:12px;
-                padding:16px 18px; text-align:center; height:100%;">
+    <div style="background:#fff; border:1px solid #ddc8f0; border-radius:12px;
+                padding:16px 18px; text-align:center; height:100%;
+                box-shadow:0 2px 8px rgba(100,40,160,0.07);">
         <div style="font-size:11px; color:#999; margin-bottom:6px;">{label}</div>
         <div style="font-size:22px; font-weight:700; color:#2d0050;">{val_fmt}</div>
         {sub_html}
@@ -221,7 +263,7 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
         st.markdown(f"""
         <div style="text-align:center; padding:20px 0 14px;">
             {_logo_html(altura=44)}
-            <div style="color:#aaa; font-size:11px; margin-top:8px;">
+            <div style="color:#9070b8; font-size:11px; margin-top:8px;">
                 Control Presupuestario 2026
             </div>
         </div>
@@ -229,7 +271,7 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
 
         # Sección VISTA
         st.markdown("""
-        <div style="font-size:9px; color:#bbb; font-weight:700; letter-spacing:1.5px;
+        <div style="font-size:9px; color:#9870b8; font-weight:700; letter-spacing:1.5px;
                     padding:0 4px 4px; text-transform:uppercase;">VISTA</div>
         """, unsafe_allow_html=True)
 
@@ -243,12 +285,12 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
         rol = st.session_state.get("rol", "")
         if rol == "admin":
             st.markdown("""
-            <div style="font-size:9px; color:#bbb; font-weight:700; letter-spacing:1.5px;
+            <div style="font-size:9px; color:#9870b8; font-weight:700; letter-spacing:1.5px;
                         padding:10px 4px 4px; text-transform:uppercase;">ADMINISTRACIÓN</div>
             """, unsafe_allow_html=True)
             st.page_link("pages/5_cargar_datos.py", label="⬆️  Cargar Datos", use_container_width=True)
 
-        st.markdown("<hr style='border:none; border-top:1px solid #f0dff0; margin:14px 0;'>",
+        st.markdown("<hr style='border:none; border-top:1px solid #d0a8e0; margin:14px 0;'>",
                     unsafe_allow_html=True)
 
         sociedad_sel = "Todas"
@@ -274,16 +316,16 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
                 if st.checkbox(nombre_cc, value=True, key=f"cc_{codigo}"):
                     cc_sel.append(codigo)
 
-        st.markdown("<hr style='border:none; border-top:1px solid #f0dff0; margin:14px 0;'>",
+        st.markdown("<hr style='border:none; border-top:1px solid #d0a8e0; margin:14px 0;'>",
                     unsafe_allow_html=True)
 
         # Usuario
         nombre = st.session_state.get("nombre", "")
         rol_display = st.session_state.get("rol", "").capitalize()
         st.markdown(f"""
-        <div style="background:#fdf5fb; border-radius:8px; padding:10px 12px; margin-bottom:10px;">
+        <div style="background:#f0dcff; border-radius:8px; padding:10px 12px; margin-bottom:10px;">
             <div style="font-size:12px; font-weight:600; color:#2d0050;">👤 {nombre}</div>
-            <div style="font-size:11px; color:#888;">{rol_display}</div>
+            <div style="font-size:11px; color:#7050a0;">{rol_display}</div>
         </div>
         """, unsafe_allow_html=True)
 
