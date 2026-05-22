@@ -5,10 +5,13 @@ y ejecutar el ETL directamente desde la webapp.
 """
 import streamlit as st
 import pandas as pd
+from datetime import date
 from utils.auth import login, requiere_admin
 from utils.components import header, sidebar_kreems
 from utils.db import query
 from utils.etl import run_etl_acuna, run_etl_gn, run_etl_presupuesto, run_etl_cv_sync, guardar_cv_staging, eliminar_cv_staging
+
+_ANO = date.today().year
 
 st.set_page_config(page_title="Cargar Datos · Kreems", page_icon="💜", layout="wide")
 
@@ -191,7 +194,7 @@ with tab_ppto:
             • <code>COMERCIAL</code> → CC-02<br>
             • <code>DISTRIBUCIÓN</code> → CC-03<br>
             • <code>Consolidado_Automatico</code> → Ventas + CV<br><br>
-            ⚠ <b>Se elimina todo el presupuesto 2026</b>
+            ⚠ <b>Se elimina todo el presupuesto {_ANO}</b>
             antes de insertar los nuevos datos.
         </div>
         """, unsafe_allow_html=True)
@@ -204,12 +207,12 @@ with tab_ppto:
         st.markdown("")
 
         st.warning(
-            "⚠ **Atención:** Se eliminarán todos los registros de presupuesto 2026 "
+            f"⚠ **Atención:** Se eliminarán todos los registros de presupuesto {_ANO} "
             "y se reemplazarán con los datos del archivo subido."
         )
 
         confirmar = st.checkbox(
-            "Confirmo que quiero reemplazar el presupuesto completo 2026",
+            f"Confirmo que quiero reemplazar el presupuesto completo {_ANO}",
             key="confirm_ppto"
         )
 
@@ -268,12 +271,12 @@ with tab_cv:
         st.markdown("##### Agregar / actualizar registro")
 
         MESES_OPTS = {
-            "Enero (2026-01)":      "2026-01", "Febrero (2026-02)":    "2026-02",
-            "Marzo (2026-03)":      "2026-03", "Abril (2026-04)":      "2026-04",
-            "Mayo (2026-05)":       "2026-05", "Junio (2026-06)":      "2026-06",
-            "Julio (2026-07)":      "2026-07", "Agosto (2026-08)":     "2026-08",
-            "Septiembre (2026-09)": "2026-09", "Octubre (2026-10)":    "2026-10",
-            "Noviembre (2026-11)":  "2026-11", "Diciembre (2026-12)":  "2026-12",
+            f"Enero ({_ANO}-01)":       f"{_ANO}-01", f"Febrero ({_ANO}-02)":     f"{_ANO}-02",
+            f"Marzo ({_ANO}-03)":       f"{_ANO}-03", f"Abril ({_ANO}-04)":       f"{_ANO}-04",
+            f"Mayo ({_ANO}-05)":        f"{_ANO}-05", f"Junio ({_ANO}-06)":       f"{_ANO}-06",
+            f"Julio ({_ANO}-07)":       f"{_ANO}-07", f"Agosto ({_ANO}-08)":      f"{_ANO}-08",
+            f"Septiembre ({_ANO}-09)":  f"{_ANO}-09", f"Octubre ({_ANO}-10)":     f"{_ANO}-10",
+            f"Noviembre ({_ANO}-11)":   f"{_ANO}-11", f"Diciembre ({_ANO}-12)":   f"{_ANO}-12",
         }
 
         with st.form("form_cv", clear_on_submit=True):

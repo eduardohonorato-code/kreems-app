@@ -6,7 +6,7 @@ import pandas as pd
 import json
 from utils.auth import login
 from utils.components import header, sidebar_kreems
-from utils.db import query
+from utils.db import query_live as query
 
 st.set_page_config(page_title="Reportes Guardados · Kreems", page_icon="💜", layout="wide")
 

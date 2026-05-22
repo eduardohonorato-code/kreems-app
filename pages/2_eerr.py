@@ -5,10 +5,13 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import json
+from datetime import date
 from utils.auth import login
 from utils.db import query
-from utils.components import header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill, badge_html
+from utils.components import header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill, badge_html, boton_excel
 from utils.ai import generar_analisis_eerr
+
+_ANO = date.today().year
 
 st.set_page_config(page_title="Estado de Resultados · Kreems", page_icon="💜", layout="wide")
 
@@ -16,7 +19,7 @@ if not login():
     st.stop()
 
 sociedad_sel, _ = sidebar_kreems(mostrar_sociedad=True)
-header("Estado de Resultados — Real vs Presupuesto 2026")
+header(f"Estado de Resultados — Real vs Presupuesto {_ANO}")
 periodo_desde, periodo_hasta = selector_meses(key="eerr")
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -111,7 +114,11 @@ for col, (label, real, ppto_v) in zip([col1, col2, col3, col4], cards):
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── TABLA EERR ───────────────────────────────────────────────
-st.markdown("##### Estado de Resultados")
+col_tit_eerr, col_exp_eerr = st.columns([4, 1])
+with col_tit_eerr:
+    st.markdown("##### Estado de Resultados")
+with col_exp_eerr:
+    _boton_eerr = st.empty()  # se llena después de construir df_eerr
 
 filas = [
     ("Ventas",                  ventas_r, ventas_p, False, False),
@@ -142,6 +149,13 @@ for nombre, r, p, inv, es_subtotal in filas:
 df_eerr = pd.DataFrame(rows)
 subtotales_idx = df_eerr.index[df_eerr["_subtotal"]].tolist()
 df_show = df_eerr.drop(columns=["_subtotal", "_inv"])
+
+# Botón export (placeholder relleno aquí donde ya tenemos df_show)
+with _boton_eerr:
+    boton_excel(
+        {"EERR": df_show},
+        f"EERR_{periodo_desde}_{periodo_hasta}",
+    )
 
 def color_fila_idx(row):
     if row.name in subtotales_idx:

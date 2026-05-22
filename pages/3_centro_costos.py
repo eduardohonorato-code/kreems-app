@@ -7,7 +7,7 @@ import json
 import plotly.graph_objects as go
 from utils.auth import login
 from utils.db import query
-from utils.components import header, selector_meses, sidebar_kreems, fmt_mill, cc_card
+from utils.components import header, selector_meses, sidebar_kreems, fmt_mill, cc_card, boton_excel
 from utils.ai import generar_analisis_cc
 
 st.set_page_config(page_title="Centro de Costos · Kreems", page_icon="💜", layout="wide")
@@ -95,7 +95,11 @@ with col_graf:
     st.plotly_chart(fig, use_container_width=True)
 
 with col_res:
-    st.markdown("##### Resumen por CC")
+    col_tit_res, col_exp_res = st.columns([3, 1])
+    with col_tit_res:
+        st.markdown("##### Resumen por CC")
+    with col_exp_res:
+        st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
     df_r = df_cc.copy()
     df_r["variacion"] = df_r["real"] - df_r["ppto"]
     df_r["pct"]       = (df_r["real"] / df_r["ppto"] * 100).round(1).fillna(0)
@@ -125,6 +129,12 @@ with col_res:
                  "% Ejec.": lambda v: f"{v:.1f}%" if isinstance(v, float) else v})
         .apply(_tot, axis=1).map(_cv, subset=["Varianza"]).map(_cp, subset=["% Ejec."]),
         use_container_width=True, hide_index=True, height=255)
+
+    with col_exp_res:
+        boton_excel(
+            {"Centro de Costos": df_show},
+            f"CC_{periodo_desde}_{periodo_hasta}",
+        )
 
 st.markdown("<br>", unsafe_allow_html=True)
 

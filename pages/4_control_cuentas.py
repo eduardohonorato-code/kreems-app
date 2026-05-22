@@ -4,9 +4,10 @@ Control por Cuenta Contable — KPI cards + tabla detalle con alertas
 import streamlit as st
 import pandas as pd
 import json
+import plotly.graph_objects as go
 from utils.auth import login
 from utils.db import query
-from utils.components import header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill
+from utils.components import header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill, boton_excel
 from utils.ai import generar_analisis_cuentas
 
 st.set_page_config(page_title="Control por Cuenta Contable · Kreems", page_icon="💜", layout="wide")
@@ -144,6 +145,11 @@ with k4:
 st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
 # ── TABLA ─────────────────────────────────────────────────────────────────
+col_tit_ct, col_exp_ct = st.columns([4, 1])
+with col_tit_ct:
+    pass  # titulo dinámico más abajo
+_placeholder_exp_ct = col_exp_ct.empty()
+
 t_real = df_agg["real"].sum()
 t_ppto = df_agg["ppto"].sum()
 total_det = pd.DataFrame([{
@@ -195,6 +201,95 @@ st.dataframe(
     height=520
 )
 st.caption(f"{n_cuentas} cuenta{'s' if n_cuentas != 1 else ''} mostrada{'s' if n_cuentas != 1 else ''}")
+
+with _placeholder_exp_ct:
+    boton_excel(
+        {"Cuentas Contables": df_display},
+        f"CuentasContables_{periodo_desde}_{periodo_hasta}",
+    )
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── GRÁFICO TENDENCIA MENSUAL ──────────────────────────────────
+st.markdown("##### Tendencia mensual — Cuentas seleccionadas")
+
+# Cuentas con datos (sin TOTAL) para seleccionar
+cuentas_disponibles = df_agg["nombre_cuenta"].tolist()
+cuentas_sel_trend = st.multiselect(
+    "Selecciona cuentas para graficar",
+    options=cuentas_disponibles,
+    default=cuentas_disponibles[:min(3, len(cuentas_disponibles))],
+    placeholder="Elige una o más cuentas...",
+    key="cuentas_trend_sel",
+)
+
+if cuentas_sel_trend:
+    # Traer datos mensuales sin acotar por periodo para ver toda la curva del año
+    _cuentas_str = "'" + "','".join(cuentas_sel_trend) + "'"
+    df_trend = query(f"""
+        SELECT
+            periodo,
+            nombre_cuenta,
+            SUM(valor_real)  AS real,
+            SUM(valor_ppto)  AS ppto
+        FROM marts.vw_real_vs_ppto
+        WHERE nombre_cuenta IN ({_cuentas_str})
+          AND clasificacion <> 'INGRESO'
+          {filtro_soc}
+        GROUP BY periodo, nombre_cuenta
+        ORDER BY periodo, nombre_cuenta
+    """, {})
+
+    if not df_trend.empty:
+        # Nombres de meses para el eje X
+        from datetime import date as _d
+        _ano = _d.today().year
+        nombres_meses = {
+            f"{_ano}-01": "Ene", f"{_ano}-02": "Feb", f"{_ano}-03": "Mar",
+            f"{_ano}-04": "Abr", f"{_ano}-05": "May", f"{_ano}-06": "Jun",
+            f"{_ano}-07": "Jul", f"{_ano}-08": "Ago", f"{_ano}-09": "Sep",
+            f"{_ano}-10": "Oct", f"{_ano}-11": "Nov", f"{_ano}-12": "Dic",
+        }
+        df_trend["mes"] = df_trend["periodo"].astype(str).map(nombres_meses).fillna(df_trend["periodo"].astype(str))
+
+        PALETA = ["#c4007a","#2d0050","#7b2ff7","#0F6E56","#d97706","#0ea5e9","#e11d48","#16a34a"]
+
+        fig_trend = go.Figure()
+        for i, cuenta in enumerate(cuentas_sel_trend):
+            df_c = df_trend[df_trend["nombre_cuenta"] == cuenta]
+            color = PALETA[i % len(PALETA)]
+            # Línea Real
+            fig_trend.add_trace(go.Scatter(
+                x=df_c["mes"], y=df_c["real"] / 1_000_000,
+                name=f"{cuenta[:30]} — Real",
+                mode="lines+markers",
+                line=dict(color=color, width=2),
+                marker=dict(size=6),
+            ))
+            # Línea Presupuesto (punteada, mismo color)
+            fig_trend.add_trace(go.Scatter(
+                x=df_c["mes"], y=df_c["ppto"] / 1_000_000,
+                name=f"{cuenta[:30]} — Ppto",
+                mode="lines",
+                line=dict(color=color, width=1.5, dash="dot"),
+                opacity=0.55,
+            ))
+
+        fig_trend.update_layout(
+            height=340,
+            margin=dict(t=20, b=10, l=10, r=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(tickprefix="$", ticksuffix="M", gridcolor="#f5eef8", zeroline=False),
+            xaxis=dict(gridcolor="#f5eef8"),
+            legend=dict(orientation="h", y=-0.22, x=0, font=dict(size=10)),
+            font=dict(family="Inter, Arial, sans-serif", size=11, color="#555"),
+        )
+        st.plotly_chart(fig_trend, use_container_width=True)
+    else:
+        st.info("Sin datos mensuales para las cuentas seleccionadas.")
+else:
+    st.info("Selecciona al menos una cuenta para ver la tendencia mensual.")
 
 st.markdown("<br>", unsafe_allow_html=True)
 

@@ -1,12 +1,54 @@
 """
-Autenticación simple por usuario y contraseña.
-Los usuarios se definen en .streamlit/secrets.toml
+Autenticación — lee usuarios desde admin.usuarios (PostgreSQL).
+Si la tabla no existe, cae back a .streamlit/secrets.toml.
 """
 import streamlit as st
 from utils.components import _logo_html, inject_font
+from datetime import date
 
 
-def login():
+def _subtitulo_login() -> str:
+    return f"Control Presupuestario {date.today().year}"
+
+
+def _get_user_from_db(usuario: str, password: str) -> dict | None:
+    """
+    Busca el usuario en admin.usuarios.
+    Retorna dict con {rol, nombre, cc_permitidos} o None si no existe / inactivo.
+    """
+    try:
+        from utils.db import get_engine
+        from sqlalchemy import text
+        with get_engine().connect() as conn:
+            row = conn.execute(text("""
+                SELECT nombre, rol, cc_permitidos
+                FROM admin.usuarios
+                WHERE usuario = :u AND password = :p AND activo = TRUE
+            """), {"u": usuario, "p": password}).fetchone()
+        if row:
+            return {
+                "nombre": row[0],
+                "rol": row[1],
+                "cc_permitidos": list(row[2]) if row[2] else None,
+            }
+    except Exception:
+        pass
+    return None
+
+
+def _get_user_from_secrets(usuario: str, password: str) -> dict | None:
+    """Fallback: lee desde secrets.toml."""
+    users = st.secrets.get("users", {})
+    if usuario in users and users[usuario]["password"] == password:
+        return {
+            "nombre": users[usuario]["nombre"],
+            "rol": users[usuario]["rol"],
+            "cc_permitidos": users[usuario].get("cc", None),
+        }
+    return None
+
+
+def login() -> bool:
     """Muestra el formulario de login. Retorna True si el usuario está autenticado."""
     if "usuario" in st.session_state:
         return True
@@ -16,7 +58,7 @@ def login():
         <div style="text-align:center; margin-top:80px; margin-bottom:8px;">
             {_logo_html(altura=72)}
             <div style="color:#888; font-size:14px; margin-top:12px;">
-                Control Presupuestario 2026
+                {_subtitulo_login()}
             </div>
         </div>
     """, unsafe_allow_html=True)
@@ -27,12 +69,16 @@ def login():
         usuario = st.text_input("Usuario", placeholder="tu usuario")
         password = st.text_input("Contraseña", type="password", placeholder="••••••••")
         if st.button("Ingresar", use_container_width=True):
-            users = st.secrets.get("users", {})
-            if usuario in users and users[usuario]["password"] == password:
+            # Intentar BD primero, luego secrets como fallback
+            user_data = _get_user_from_db(usuario, password)
+            if user_data is None:
+                user_data = _get_user_from_secrets(usuario, password)
+
+            if user_data:
                 st.session_state["usuario"] = usuario
-                st.session_state["rol"] = users[usuario]["rol"]
-                st.session_state["nombre"] = users[usuario]["nombre"]
-                st.session_state["cc_permitidos"] = users[usuario].get("cc", None)
+                st.session_state["rol"] = user_data["rol"]
+                st.session_state["nombre"] = user_data["nombre"]
+                st.session_state["cc_permitidos"] = user_data["cc_permitidos"]
                 st.rerun()
             else:
                 st.error("Usuario o contraseña incorrectos")

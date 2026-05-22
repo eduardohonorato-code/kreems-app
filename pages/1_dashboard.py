@@ -4,11 +4,14 @@ Dashboard — Resumen ejecutivo de ventas vs presupuesto
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
+from datetime import date
 from utils.auth import login
 from utils.db import query
 from utils.components import (
-    header, selector_meses, kpi_card, sidebar_kreems, fmt_mill, badge_html
+    header, selector_meses, kpi_card, sidebar_kreems, fmt_mill, badge_html, boton_excel
 )
+
+_ANO = date.today().year
 
 st.set_page_config(
     page_title="Resumen Ejecutivo · Kreems",
@@ -177,10 +180,10 @@ with col_bar:
     if not df_mensual.empty:
         # Nombres de meses para el eje X
         nombres_meses = {
-            "2026-01": "Ene", "2026-02": "Feb", "2026-03": "Mar",
-            "2026-04": "Abr", "2026-05": "May", "2026-06": "Jun",
-            "2026-07": "Jul", "2026-08": "Ago", "2026-09": "Sep",
-            "2026-10": "Oct", "2026-11": "Nov", "2026-12": "Dic"
+            f"{_ANO}-01": "Ene", f"{_ANO}-02": "Feb", f"{_ANO}-03": "Mar",
+            f"{_ANO}-04": "Abr", f"{_ANO}-05": "May", f"{_ANO}-06": "Jun",
+            f"{_ANO}-07": "Jul", f"{_ANO}-08": "Ago", f"{_ANO}-09": "Sep",
+            f"{_ANO}-10": "Oct", f"{_ANO}-11": "Nov", f"{_ANO}-12": "Dic"
         }
         df_mensual["mes_nombre"] = df_mensual["periodo"].astype(str).map(nombres_meses)
 
@@ -266,7 +269,19 @@ with col_cc:
 st.markdown("---")
 
 # ── TABLA RESUMEN POR CC ──────────────────────────────────────
-st.markdown("##### Resumen por Centro de Costo")
+col_tit_cc, col_exp_cc = st.columns([4, 1])
+with col_tit_cc:
+    st.markdown("##### Resumen por Centro de Costo")
+with col_exp_cc:
+    if not df_cc.empty:
+        _export_df = df_cc[["nombre_cc", "real", "ppto"]].copy()
+        _export_df["variacion"] = _export_df["real"] - _export_df["ppto"]
+        _export_df["pct"] = (_export_df["real"] / _export_df["ppto"] * 100).round(1)
+        _export_df.columns = ["Centro de Costo", "Real", "Presupuesto", "Variación", "% Ejec."]
+        boton_excel(
+            {"Resumen CC": _export_df, "Ventas Mensual": df_mensual},
+            f"Dashboard_{periodo_desde}_{periodo_hasta}",
+        )
 
 if not df_cc.empty:
     df_tabla = df_cc[["nombre_cc", "real", "ppto"]].copy()

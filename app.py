@@ -2,8 +2,11 @@
 Kreems FP&A — Inicio
 """
 import streamlit as st
+from datetime import date
 from utils.auth import login
 from utils.components import header, sidebar_kreems
+
+_ANO = date.today().year
 
 st.set_page_config(
     page_title="Inicio · Kreems",
@@ -26,7 +29,7 @@ st.markdown(f"""
     <span style="font-size:1.3rem;font-weight:700;color:#2d0050;margin-left:8px;">{nombre}</span>
 </div>
 <p style="color:#999;font-size:14px;margin-bottom:32px;">
-    Selecciona una sección para comenzar el análisis presupuestario 2026.
+    Selecciona una sección para comenzar el análisis presupuestario {_ANO}.
 </p>
 """, unsafe_allow_html=True)
 
@@ -48,7 +51,16 @@ cards = [
      "pages/6_reportes.py"),
 ]
 
-cols = st.columns(5)
+# Tarjeta de admin solo visible para admins
+if st.session_state.get("rol") == "admin":
+    cards.append((
+        "👤", "Admin Usuarios",
+        "Gestiona los usuarios de la app: crear, editar, cambiar contraseña y eliminar.",
+        "pages/7_admin_usuarios.py",
+    ))
+
+n_cols = len(cards)
+cols = st.columns(n_cols)
 for col, (icono, titulo, desc, path) in zip(cols, cards):
     with col:
         st.markdown(f"""

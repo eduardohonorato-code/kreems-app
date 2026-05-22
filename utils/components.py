@@ -178,16 +178,19 @@ MESES = {
     9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
 }
 
-MESES_PERIODOS = {
-    "Enero": "2026-01", "Febrero": "2026-02", "Marzo": "2026-03",
-    "Abril": "2026-04", "Mayo": "2026-05", "Junio": "2026-06",
-    "Julio": "2026-07", "Agosto": "2026-08", "Septiembre": "2026-09",
-    "Octubre": "2026-10", "Noviembre": "2026-11", "Diciembre": "2026-12"
-}
+# ── AÑO FISCAL — cambiar aquí para el siguiente año ──────────
+_HOY       = date.today()
+ANO_FISCAL = _HOY.year          # detecta el año actual automáticamente
+MES_NUM_ACTUAL = _HOY.month
 
-# Mes actual del sistema (para labels CERRADO / ACTUAL / PROYECTADO)
-_HOY = date.today()
-MES_NUM_ACTUAL = _HOY.month  # 5 en mayo 2026
+MESES_PERIODOS = {
+    nombre: f"{ANO_FISCAL}-{num:02d}"
+    for num, nombre in {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+        5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+        9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+    }.items()
+}
 
 
 def _estado_mes(num: int) -> tuple[str, str, str]:
@@ -217,7 +220,7 @@ def header(titulo: str):
     ">
         {_logo_html(altura=42)}
         <span style="color:#2d0050; font-size:1.3rem; font-weight:600;">{titulo}</span>
-        <span style="color:#bbb; font-size:12px;">Control Presupuestario 2026</span>
+        <span style="color:#bbb; font-size:12px;">Control Presupuestario {ANO_FISCAL}</span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -318,7 +321,7 @@ def selector_meses(key: str = "mes", default: str = "Mayo") -> tuple:
     periodo_txt = desde if desde == hasta else f"{desde} – {hasta}"
     label_placeholder.markdown(
         f"<div style='padding-top:26px;font-size:13px;color:#c4007a;"
-        f"font-weight:600;'>📅 {periodo_txt} 2026</div>",
+        f"font-weight:600;'>📅 {periodo_txt} {ANO_FISCAL}</div>",
         unsafe_allow_html=True
     )
 
@@ -549,3 +552,38 @@ def fmt_clp(v: float) -> str:
     if v is None:
         return "—"
     return f"${v:,.0f}"
+
+
+def df_to_excel_bytes(frames: dict) -> bytes:
+    """
+    Convierte uno o varios DataFrames a un archivo Excel en memoria.
+    Args:
+        frames: dict donde la clave es el nombre de la hoja y el valor es un DataFrame.
+    Returns:
+        bytes del archivo .xlsx
+    """
+    import io
+    import pandas as pd
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        for sheet_name, df in frames.items():
+            df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+    return buf.getvalue()
+
+
+def boton_excel(frames: dict, nombre_archivo: str, label: str = "⬇ Exportar Excel"):
+    """
+    Renderiza un st.download_button para exportar DataFrames a Excel.
+    Args:
+        frames:         dict hoja→DataFrame
+        nombre_archivo: nombre del archivo sin extensión
+        label:          texto del botón
+    """
+    datos = df_to_excel_bytes(frames)
+    st.download_button(
+        label=label,
+        data=datos,
+        file_name=f"{nombre_archivo}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=False,
+    )
