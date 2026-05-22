@@ -226,13 +226,12 @@ def header(titulo: str):
 
 def selector_meses(key: str = "mes", default: str = "Mayo") -> tuple:
     """
-    Selector de rango de meses: Desde / Hasta + atajos YTD y Mes actual.
+    Selector de período con botones rápidos por mes + rango personalizado Desde/Hasta.
     Retorna (periodo_desde, periodo_hasta) en formato 'YYYY-MM'.
     """
-    meses_lista   = list(MESES.values())   # ["Enero", ..., "Diciembre"]
-    mes_actual_nm = MESES[MES_NUM_ACTUAL]  # nombre del mes actual del sistema
+    meses_lista   = list(MESES.values())
+    mes_actual_nm = MESES[MES_NUM_ACTUAL]
 
-    # Variables de estado propias (independientes de los widgets)
     k_desde = f"_sm_{key}_desde"
     k_hasta = f"_sm_{key}_hasta"
     if k_desde not in st.session_state:
@@ -240,60 +239,88 @@ def selector_meses(key: str = "mes", default: str = "Mayo") -> tuple:
     if k_hasta not in st.session_state:
         st.session_state[k_hasta] = default
 
-    # ── Botones de acceso rápido ───────────────────────────────
-    col_lbl, col_desde, col_arrow, col_hasta, col_gap, col_ytd, col_act = \
-        st.columns([0.55, 1.35, 0.12, 1.35, 0.6, 0.58, 0.95])
+    desde_act = st.session_state[k_desde]
+    hasta_act  = st.session_state[k_hasta]
 
-    with col_ytd:
-        st.markdown("<div style='font-size:10px;color:transparent;'>.</div>", unsafe_allow_html=True)
-        if st.button("YTD", key=f"_sm_{key}_btn_ytd", use_container_width=True):
+    # ── Fila 1: botones rápidos por mes (solo hasta el mes actual) + YTD ──
+    meses_visibles = [(num, nom) for num, nom in MESES.items() if num <= MES_NUM_ACTUAL]
+    n = len(meses_visibles)
+    # columnas: n meses + separador + YTD + label período
+    cols_row1 = st.columns([1] * n + [0.25, 0.9, 2.2])
+
+    for i, (num, nombre) in enumerate(meses_visibles):
+        with cols_row1[i]:
+            lbl, color, icono = _estado_mes(num)
+            st.markdown(
+                f"<div style='font-size:8px;color:{color};text-align:center;"
+                f"font-weight:700;letter-spacing:0.3px;padding-bottom:2px;'>"
+                f"{icono} {lbl}</div>", unsafe_allow_html=True
+            )
+            activo = (desde_act == nombre and hasta_act == nombre)
+            if st.button(nombre[:3], key=f"_sm_{key}_m{num}",
+                         type="primary" if activo else "secondary",
+                         use_container_width=True):
+                st.session_state[k_desde] = nombre
+                st.session_state[k_hasta] = nombre
+                st.rerun()
+
+    # Separador visual
+    with cols_row1[n]:
+        st.markdown("<div style='padding-top:28px;text-align:center;color:#E2E8F0;font-size:18px;'>│</div>",
+                    unsafe_allow_html=True)
+
+    # Botón YTD
+    with cols_row1[n + 1]:
+        st.markdown("<div style='font-size:8px;color:#94A3B8;text-align:center;"
+                    "font-weight:700;padding-bottom:2px;'>ACUM.</div>", unsafe_allow_html=True)
+        ytd_activo = (desde_act == "Enero" and hasta_act == mes_actual_nm)
+        if st.button("YTD", key=f"_sm_{key}_ytd",
+                     type="primary" if ytd_activo else "secondary",
+                     use_container_width=True):
             st.session_state[k_desde] = "Enero"
             st.session_state[k_hasta] = mes_actual_nm
             st.rerun()
 
-    with col_act:
-        st.markdown("<div style='font-size:10px;color:transparent;'>.</div>", unsafe_allow_html=True)
-        if st.button("Mes actual", key=f"_sm_{key}_btn_act", use_container_width=True):
-            st.session_state[k_desde] = mes_actual_nm
-            st.session_state[k_hasta] = mes_actual_nm
-            st.rerun()
-
-    # ── Selectboxes (sin key para evitar conflicto con session_state) ─────
-    with col_lbl:
+    # Label del período activo
+    with cols_row1[n + 2]:
+        if desde_act == hasta_act:
+            periodo_txt = f"{desde_act} 2026"
+        else:
+            periodo_txt = f"{desde_act} – {hasta_act} 2026"
         st.markdown(
-            "<div style='padding-top:7px;font-size:13px;color:#64748B;font-weight:500;'>"
-            "Período</div>", unsafe_allow_html=True)
+            f"<div style='padding-top:26px;font-size:13px;color:#c4007a;"
+            f"font-weight:600;'>📅 {periodo_txt}</div>",
+            unsafe_allow_html=True
+        )
+
+    # ── Fila 2: rango personalizado Desde / Hasta ──────────────
+    col_lbl, col_desde, col_arrow, col_hasta, col_spacer = \
+        st.columns([0.6, 1.3, 0.12, 1.3, 3.0])
+
+    with col_lbl:
+        st.markdown("<div style='padding-top:7px;font-size:12px;color:#94A3B8;'>Rango</div>",
+                    unsafe_allow_html=True)
 
     with col_desde:
-        st.markdown("<div style='font-size:10px;color:#94A3B8;margin-bottom:1px;'>Desde</div>",
-                    unsafe_allow_html=True)
-        desde = st.selectbox(
-            "Desde", meses_lista,
+        desde = st.selectbox("Desde", meses_lista,
             index=meses_lista.index(st.session_state[k_desde]),
-            label_visibility="collapsed"
-        )
-        st.session_state[k_desde] = desde   # sincronizar manualmente
+            label_visibility="collapsed")
+        st.session_state[k_desde] = desde
 
     with col_arrow:
-        st.markdown(
-            "<div style='padding-top:26px;text-align:center;color:#CBD5E1;font-size:14px;'>→</div>",
-            unsafe_allow_html=True)
+        st.markdown("<div style='padding-top:8px;text-align:center;color:#CBD5E1;'>→</div>",
+                    unsafe_allow_html=True)
 
     with col_hasta:
-        st.markdown("<div style='font-size:10px;color:#94A3B8;margin-bottom:1px;'>Hasta</div>",
-                    unsafe_allow_html=True)
-        hasta = st.selectbox(
-            "Hasta", meses_lista,
+        hasta = st.selectbox("Hasta", meses_lista,
             index=meses_lista.index(st.session_state[k_hasta]),
-            label_visibility="collapsed"
-        )
-        st.session_state[k_hasta] = hasta   # sincronizar manualmente
+            label_visibility="collapsed")
+        st.session_state[k_hasta] = hasta
 
-    # Validar rango: si hasta < desde, igualar
+    # Validar rango
     if meses_lista.index(hasta) < meses_lista.index(desde):
         hasta = desde
         st.session_state[k_hasta] = desde
-        st.caption("⚠ 'Hasta' no puede ser anterior a 'Desde' — ajustado automáticamente.")
 
     return (MESES_PERIODOS[desde], MESES_PERIODOS[hasta])
 
