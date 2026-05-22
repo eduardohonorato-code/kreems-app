@@ -25,6 +25,61 @@ def inject_font():
             font-feature-settings: "liga" 0, "clig" 0 !important;
         }
 
+        /* ── AG Grid: menú de columnas (3 puntos) ── */
+        .ag-popup,
+        .ag-menu,
+        .ag-column-menu,
+        .ag-tabs,
+        .ag-tabs-header,
+        .ag-tabs-body {
+            background-color: #FFFFFF !important;
+            border: 1px solid #E2E8F0 !important;
+            border-radius: 8px !important;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.12) !important;
+            z-index: 9999 !important;
+            overflow: hidden !important;
+        }
+        .ag-menu-list {
+            background-color: #FFFFFF !important;
+            padding: 4px 0 !important;
+        }
+        .ag-menu-option {
+            background-color: #FFFFFF !important;
+            color: #0F172A !important;
+            font-size: 13px !important;
+            padding: 6px 14px !important;
+            cursor: pointer !important;
+        }
+        .ag-menu-option:hover,
+        .ag-menu-option-active {
+            background-color: #F1F5F9 !important;
+            color: #0F172A !important;
+        }
+        .ag-menu-option-icon {
+            color: #94A3B8 !important;
+        }
+        .ag-tab {
+            background-color: #FFFFFF !important;
+            color: #94A3B8 !important;
+            border-bottom: 2px solid transparent !important;
+            padding: 6px 12px !important;
+        }
+        .ag-tab-selected {
+            color: #c4007a !important;
+            border-bottom-color: #c4007a !important;
+        }
+        .ag-filter {
+            background-color: #FFFFFF !important;
+            padding: 8px !important;
+        }
+        .ag-filter input {
+            background-color: #F1F5F9 !important;
+            border: 1px solid #E2E8F0 !important;
+            border-radius: 6px !important;
+            color: #0F172A !important;
+            padding: 4px 8px !important;
+        }
+
         /* ── Sidebar oscuro aplicado directamente por CSS ── */
         [data-testid="stSidebar"] {
             background-color: #18112E !important;
