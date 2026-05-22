@@ -2,6 +2,8 @@
 Kreems FP&A — Inicio
 """
 import streamlit as st
+from utils.auth import login
+from utils.components import header, sidebar_kreems
 
 st.set_page_config(
     page_title="Inicio · Kreems",
@@ -9,15 +11,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-try:
-    from utils.auth import login
-    from utils.components import header, sidebar_kreems
-except Exception as _e:
-    import traceback
-    st.error(f"Error de importación: {_e}")
-    st.code(traceback.format_exc())
-    st.stop()
 
 if not login():
     st.stop()
