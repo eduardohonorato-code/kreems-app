@@ -25,44 +25,14 @@ def inject_font():
             font-feature-settings: "liga" 0, "clig" 0 !important;
         }
 
-        /* ── Inputs y widgets en área principal: fondo claro ── */
-        [data-testid="stAppViewContainer"] input[type="text"],
-        [data-testid="stAppViewContainer"] input[type="password"],
-        [data-testid="stAppViewContainer"] input[type="number"],
-        [data-testid="stAppViewContainer"] input,
-        [data-testid="stAppViewContainer"] textarea,
-        [data-testid="stAppViewContainer"] .stSelectbox > div > div,
-        [data-testid="stAppViewContainer"] [data-baseweb="select"] > div {
-            background-color: #FFFFFF !important;
-            color: #0F172A !important;
-            border-color: #E2E8F0 !important;
-            border-radius: 8px !important;
-        }
-        [data-testid="stAppViewContainer"] input:focus,
-        [data-testid="stAppViewContainer"] textarea:focus {
-            border-color: #c4007a !important;
-            box-shadow: 0 0 0 2px rgba(196,0,122,0.10) !important;
-        }
-
-        /* Contenedor y botón ojo de contraseña */
-        [data-testid="stAppViewContainer"] [data-testid="stTextInput"] > div,
-        [data-testid="stAppViewContainer"] [data-testid="stTextInput"] > div > div {
-            background-color: #FFFFFF !important;
-            border-radius: 8px !important;
-        }
-        [data-testid="stAppViewContainer"] [data-testid="stTextInput"] button,
-        [data-testid="stAppViewContainer"] [data-testid="stTextInput"] button > div,
-        [data-testid="stAppViewContainer"] [data-testid="stTextInput"] button span {
-            background-color: #FFFFFF !important;
-            color: #94A3B8 !important;
-            border: none !important;
-            box-shadow: none !important;
-        }
-
-        /* ── Sidebar oscuro: texto claro ── */
+        /* ── Sidebar oscuro aplicado directamente por CSS ── */
         [data-testid="stSidebar"] {
+            background-color: #18112E !important;
             border-right: none !important;
-            box-shadow: 2px 0 12px rgba(0,0,0,0.18) !important;
+            box-shadow: 2px 0 12px rgba(0,0,0,0.20) !important;
+        }
+        [data-testid="stSidebar"] > div:first-child {
+            background-color: #18112E !important;
         }
         [data-testid="stSidebar"] p,
         [data-testid="stSidebar"] span,
