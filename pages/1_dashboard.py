@@ -282,7 +282,17 @@ if not df_cc.empty:
         "variacion": total_real - total_ppto,
         "pct":       round(total_real / total_ppto * 100, 1) if total_ppto else 0
     }])
-    df_tabla = pd.concat([df_tabla, total], ignore_index=True)
+
+    # Ordenamiento
+    _DASH_SORT = {"% Ejec.": "pct", "Variación": "variacion", "Real": "real", "Presupuesto": "ppto", "CC": "nombre_cc"}
+    _c1, _c2, _spacer = st.columns([1.4, 1, 4])
+    with _c1:
+        d_sort_col = st.selectbox("Ordenar", list(_DASH_SORT.keys()), key="sort_dash_col", label_visibility="collapsed")
+    with _c2:
+        d_sort_asc = st.selectbox("Dir.", ["↓ Mayor", "↑ Menor"], key="sort_dash_dir", label_visibility="collapsed") == "↑ Menor"
+
+    df_body = df_tabla.sort_values(_DASH_SORT[d_sort_col], ascending=d_sort_asc, ignore_index=True)
+    df_tabla = pd.concat([df_body, total], ignore_index=True)
 
     df_show = df_tabla.rename(columns={
         "nombre_cc": "Centro de Costo",

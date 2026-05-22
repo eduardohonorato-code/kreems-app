@@ -105,7 +105,17 @@ with col_res:
         "variacion": df_r["real"].sum() - df_r["ppto"].sum(),
         "pct": round(df_r["real"].sum() / df_r["ppto"].sum() * 100, 1) if df_r["ppto"].sum() else 0
     }])
-    df_show = pd.concat([df_r[["nombre","real","ppto","variacion","pct"]], total], ignore_index=True)
+
+    # Ordenamiento
+    _CC_SORT = {"% Ejec.": "pct", "Varianza": "variacion", "Real": "real", "Presupuesto": "ppto", "CC": "nombre"}
+    c_srt, c_dir = st.columns([1.6, 1])
+    with c_srt:
+        cc_sort_col = st.selectbox("Ordenar", list(_CC_SORT.keys()), key="sort_cc_col", label_visibility="collapsed")
+    with c_dir:
+        cc_sort_asc = st.selectbox("Dir.", ["↓ Mayor", "↑ Menor"], key="sort_cc_dir", label_visibility="collapsed") == "↑ Menor"
+
+    df_body = df_r[["nombre","real","ppto","variacion","pct"]].sort_values(_CC_SORT[cc_sort_col], ascending=cc_sort_asc, ignore_index=True)
+    df_show = pd.concat([df_body, total], ignore_index=True)
     df_show = df_show.rename(columns={"nombre":"CC","real":"Real","ppto":"Presupuesto","variacion":"Varianza","pct":"% Ejec."})
 
     def _cv(val):
