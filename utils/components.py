@@ -44,6 +44,20 @@ def inject_font():
             box-shadow: 0 0 0 2px rgba(196,0,122,0.10) !important;
         }
 
+        /* Botón ojo de contraseña */
+        [data-testid="stAppViewContainer"] [data-testid="stTextInput"] button,
+        [data-testid="stAppViewContainer"] input[type="password"] ~ button,
+        [data-testid="stAppViewContainer"] .stTextInput button {
+            background-color: #FFFFFF !important;
+            color: #94A3B8 !important;
+            border: none !important;
+            box-shadow: none !important;
+        }
+        [data-testid="stAppViewContainer"] .stTextInput button:hover {
+            background-color: #F1F5F9 !important;
+            color: #0F172A !important;
+        }
+
         /* ── Sidebar oscuro: texto claro ── */
         [data-testid="stSidebar"] {
             border-right: none !important;
