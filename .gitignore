@@ -1,0 +1,16 @@
+# Credenciales — NUNCA subir
+.streamlit/secrets.toml
+
+# Archivos temporales del editor
+*.tmp.*
+*.tmp
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Sistema
+.DS_Store
+Thumbs.db

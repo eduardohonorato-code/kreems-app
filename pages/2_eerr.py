@@ -1,0 +1,332 @@
+"""
+EERR — Estado de Resultados Real vs Presupuesto
+"""
+import streamlit as st
+import plotly.graph_objects as go
+import pandas as pd
+import json
+from utils.auth import login
+from utils.db import query
+from utils.components import header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill, badge_html
+from utils.ai import generar_analisis_eerr
+
+st.set_page_config(page_title="Estado de Resultados · Kreems", page_icon="💜", layout="wide")
+
+if not login():
+    st.stop()
+
+sociedad_sel, _ = sidebar_kreems(mostrar_sociedad=True)
+header("Estado de Resultados — Real vs Presupuesto 2026")
+periodo_desde, periodo_hasta = selector_meses(key="eerr")
+st.markdown("<br>", unsafe_allow_html=True)
+
+filtro_soc = f"AND sociedad = '{sociedad_sel}'" if sociedad_sel != "Todas" else ""
+
+# ── DATOS RAW ────────────────────────────────────────────────
+df_raw = query(f"""
+    SELECT
+        clasificacion,
+        SUM(valor_real) AS real,
+        SUM(valor_ppto) AS ppto
+    FROM marts.vw_real_vs_ppto
+    WHERE periodo BETWEEN :desde AND :hasta {filtro_soc}
+    GROUP BY clasificacion
+""", {"desde": periodo_desde, "hasta": periodo_hasta})
+
+# ── HELPER ───────────────────────────────────────────────────
+def get_val(df, clasif, col):
+    row = df[df["clasificacion"] == clasif]
+    return float(row[col].iloc[0]) if not row.empty else 0.0
+
+ventas_r  = get_val(df_raw, "INGRESO",        "real")
+ventas_p  = get_val(df_raw, "INGRESO",        "ppto")
+cv_r      = get_val(df_raw, "COSTO_VAR",      "real")
+cv_p      = get_val(df_raw, "COSTO_VAR",      "ppto")
+cf_r      = get_val(df_raw, "COSTO_FIJO",     "real")
+cf_p      = get_val(df_raw, "COSTO_FIJO",     "ppto")
+opex_r    = get_val(df_raw, "OPEX",           "real")
+opex_p    = get_val(df_raw, "OPEX",           "ppto")
+fin_r     = get_val(df_raw, "FINANCIERO",     "real")
+fin_p     = get_val(df_raw, "FINANCIERO",     "ppto")
+nooper_r  = get_val(df_raw, "NO_OPERACIONAL", "real")
+nooper_p  = get_val(df_raw, "NO_OPERACIONAL", "ppto")
+
+ub_r   = ventas_r - cv_r
+ub_p   = ventas_p - cv_p
+ebit_r = ub_r - cf_r - opex_r
+ebit_p = ub_p - cf_p - opex_p
+un_r   = ebit_r - fin_r - nooper_r
+un_p   = ebit_p - fin_p - nooper_p
+
+def pct(r, p):
+    return (r / p * 100) if p else 0.0
+
+def var(r, p):
+    return r - p
+
+# ── KPI CARDS ────────────────────────────────────────────────
+col1, col2, col3, col4 = st.columns(4)
+
+cards = [
+    ("Ventas",         ventas_r, ventas_p),
+    ("Utilidad Bruta", ub_r,     ub_p),
+    ("EBIT",           ebit_r,   ebit_p),
+    ("% EBIT",         None,     None),
+]
+
+for col, (label, real, ppto_v) in zip([col1, col2, col3, col4], cards):
+    with col:
+        if label == "% EBIT":
+            pct_ebit_r = (ebit_r / ventas_r * 100) if ventas_r else 0
+            pct_ebit_p = (ebit_p / ventas_p * 100) if ventas_p else 0
+            diff = pct_ebit_r - pct_ebit_p
+            color = "#0F6E56" if diff >= 0 else "#cc0000"
+            icono = "↑" if diff >= 0 else "↓"
+            st.markdown(f"""
+            <div style="background:#fff; border:1px solid #f0dff0; border-radius:12px;
+                        padding:16px 18px; text-align:center;">
+                <div style="font-size:11px; color:#999; margin-bottom:6px;">% EBIT Real vs Obj</div>
+                <div style="font-size:22px; font-weight:700; color:#2d0050;">{pct_ebit_r:.2f}%</div>
+                <div style="font-size:12px; color:{color}; margin-top:4px;">
+                    {icono} {abs(diff):.2f}pp vs obj {pct_ebit_p:.2f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            variacion = var(real, ppto_v)
+            pct_v     = pct(real, ppto_v)
+            color = "#0F6E56" if variacion >= 0 else "#cc0000"
+            icono = "↑" if variacion >= 0 else "↓"
+            st.markdown(f"""
+            <div style="background:#fff; border:1px solid #f0dff0; border-radius:12px;
+                        padding:16px 18px; text-align:center;">
+                <div style="font-size:11px; color:#999; margin-bottom:6px;">{label} Real vs Ppto</div>
+                <div style="font-size:22px; font-weight:700; color:#2d0050;">
+                    ${real/1_000_000:,.2f}M</div>
+                <div style="font-size:12px; color:{color}; margin-top:4px;">
+                    {icono} {abs(variacion)/1_000_000:,.2f}M ({pct_v:.1f}%)</div>
+                <div style="font-size:11px; color:#aaa;">Obj: ${ppto_v/1_000_000:,.2f}M</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── TABLA EERR ───────────────────────────────────────────────
+st.markdown("##### Estado de Resultados")
+
+filas = [
+    ("Ventas",                  ventas_r, ventas_p, False, False),
+    ("Costo de Venta",          cv_r,     cv_p,     True,  False),
+    ("Utilidad Bruta",          ub_r,     ub_p,     False, True),
+    ("Costo Fijo",              cf_r,     cf_p,     True,  False),
+    ("OPEX",                    opex_r,   opex_p,   True,  False),
+    ("EBIT",                    ebit_r,   ebit_p,   False, True),
+    ("Gastos Financieros",      fin_r,    fin_p,    True,  False),
+    ("Gastos No Operacionales", nooper_r, nooper_p, True,  False),
+    ("Utilidad Neta",           un_r,     un_p,     False, True),
+]
+
+rows = []
+for nombre, r, p, inv, es_subtotal in filas:
+    variacion = r - p
+    pct_v     = (r / p * 100) if p else 0
+    rows.append({
+        "Concepto":    nombre,
+        "Real":        r,
+        "Presupuesto": p,
+        "Varianza":    variacion,
+        "% Ejec.":     pct_v,
+        "_subtotal":   es_subtotal,
+        "_inv":        inv,
+    })
+
+df_eerr = pd.DataFrame(rows)
+subtotales_idx = df_eerr.index[df_eerr["_subtotal"]].tolist()
+df_show = df_eerr.drop(columns=["_subtotal", "_inv"])
+
+def color_fila_idx(row):
+    if row.name in subtotales_idx:
+        return ["font-weight:bold; background:#fdf5fb; color:#2d0050"] * len(row)
+    return [""] * len(row)
+
+def color_varianza(val):
+    if not isinstance(val, (int, float)):
+        return ""
+    return "color:#0F6E56;font-weight:500" if val >= 0 else "color:#cc0000;font-weight:500"
+
+def color_pct(val):
+    if not isinstance(val, (int, float)):
+        return ""
+    return "color:#0F6E56" if val <= 100 else "color:#cc0000; font-weight:600"
+
+st.dataframe(
+    df_show.style
+        .format({
+            "Real":        lambda v: fmt_clp(v),
+            "Presupuesto": lambda v: fmt_clp(v),
+            "Varianza":    lambda v: fmt_clp(v),
+            "% Ejec.":     lambda v: f"{v:.1f}%"
+        })
+        .apply(color_fila_idx, axis=1)
+        .map(color_varianza, subset=["Varianza"])
+        .map(color_pct, subset=["% Ejec."]),
+    use_container_width=True,
+    hide_index=True,
+    height=480,
+)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── RATIOS FINANCIEROS ────────────────────────────────────────
+st.markdown("##### Ratios Financieros")
+ratios = [
+    ("Margen Bruto",  (ub_r / ventas_r * 100) if ventas_r else 0,
+                      (ub_p / ventas_p * 100) if ventas_p else 0),
+    ("Margen EBIT",   (ebit_r / ventas_r * 100) if ventas_r else 0,
+                      (ebit_p / ventas_p * 100) if ventas_p else 0),
+    ("Margen Neto",   (un_r / ventas_r * 100) if ventas_r else 0,
+                      (un_p / ventas_p * 100) if ventas_p else 0),
+    ("OPEX / Ventas", (opex_r / ventas_r * 100) if ventas_r else 0,
+                      (opex_p / ventas_p * 100) if ventas_p else 0),
+    ("CV / Ventas",   (cv_r / ventas_r * 100) if ventas_r else 0,
+                      (cv_p / ventas_p * 100) if ventas_p else 0),
+]
+cols_r = st.columns(len(ratios))
+for col, (nombre, r_val, p_val) in zip(cols_r, ratios):
+    diff = r_val - p_val
+    inv  = nombre in ("OPEX / Ventas", "CV / Ventas")
+    ok   = (diff <= 0) if inv else (diff >= 0)
+    color = "#0F6E56" if ok else "#cc0000"
+    icono = "↓" if diff < 0 else "↑"
+    with col:
+        st.markdown(f"""
+        <div style="background:#f5f7fa; border-radius:10px; padding:10px 12px;
+                    text-align:center; border:1px solid #e2e8f0;">
+            <div style="font-size:10px; color:#888; margin-bottom:4px;">{nombre}</div>
+            <div style="font-size:16px; font-weight:700; color:#2d0050;">{r_val:.1f}%</div>
+            <div style="font-size:10px; color:{color};">{icono} {abs(diff):.1f}pp</div>
+            <div style="font-size:10px; color:#aaa;">Obj: {p_val:.1f}%</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── WATERFALL ─────────────────────────────────────────────────
+st.markdown("##### Composición del Resultado (Real)")
+col_wf, _ = st.columns([2, 1])
+
+with col_wf:
+    wf_labels  = ["Ventas", "- Costo Var.", "Util. Bruta", "- C. Fijo", "- OPEX",
+                  "EBIT", "- G. Fin.", "- G. No Op.", "Util. Neta"]
+    wf_measure = ["absolute", "relative", "total", "relative", "relative",
+                  "total", "relative", "relative", "total"]
+    wf_values  = [ventas_r, -cv_r, ub_r, -cf_r, -opex_r, ebit_r, -fin_r, -nooper_r, un_r]
+
+    fig_wf = go.Figure(go.Waterfall(
+        orientation="v",
+        measure=wf_measure,
+        x=wf_labels,
+        y=[v / 1_000_000 for v in wf_values],
+        connector={"line": {"color": "#e0c8e8", "width": 1, "dash": "dot"}},
+        increasing={"marker": {"color": "#0F6E56"}},
+        decreasing={"marker": {"color": "#c4007a"}},
+        totals={"marker": {"color": "#2d0050"}},
+        texttemplate="%{y:.1f}M",
+        textfont={"size": 10},
+        textposition="outside",
+    ))
+    fig_wf.update_layout(
+        height=260,
+        margin=dict(t=20, b=10, l=10, r=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(tickprefix="$", ticksuffix="M", gridcolor="#f5eef8",
+                   zeroline=True, zerolinecolor="#e8d8f0"),
+        xaxis=dict(tickfont={"size": 10}),
+        showlegend=False,
+        font=dict(family="Inter, Arial, sans-serif", size=11, color="#555")
+    )
+    st.plotly_chart(fig_wf, use_container_width=True)
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── ANÁLISIS IA ───────────────────────────────────────────────
+st.markdown("##### Análisis IA")
+
+if "analisis_texto" not in st.session_state:
+    st.session_state["analisis_texto"] = ""
+
+col_btn_ia, col_btn_cerrar, _ = st.columns([2, 1, 2])
+
+with col_btn_ia:
+    if st.button("Generar Análisis con IA", type="primary", use_container_width=True):
+        datos_ia = {
+            "ventas_r": ventas_r, "ventas_p": ventas_p,
+            "cv_r":     cv_r,     "cv_p":     cv_p,
+            "cf_r":     cf_r,     "cf_p":     cf_p,
+            "opex_r":   opex_r,   "opex_p":   opex_p,
+            "ub_r":     ub_r,     "ub_p":     ub_p,
+            "ebit_r":   ebit_r,   "ebit_p":   ebit_p,
+            "un_r":     un_r,     "un_p":     un_p,
+            "periodo_desde": periodo_desde,
+            "periodo_hasta": periodo_hasta,
+            "sociedad": sociedad_sel,
+        }
+        with st.spinner("Analizando datos con IA..."):
+            st.session_state["analisis_texto"] = generar_analisis_eerr(datos_ia)
+            st.session_state["analisis_datos"] = datos_ia
+
+if st.session_state["analisis_texto"]:
+    with col_btn_cerrar:
+        if st.button("✕ Cerrar", use_container_width=True):
+            st.session_state["analisis_texto"] = ""
+            st.rerun()
+
+if st.session_state["analisis_texto"]:
+    st.markdown(f"""
+    <div style="background:#fafafa; border:1px solid #e2e8f0; border-left:4px solid #2d0050;
+                border-radius:8px; padding:20px 24px; margin-top:12px;
+                font-size:13px; line-height:1.8; color:#333; white-space:pre-wrap;">
+{st.session_state["analisis_texto"]}
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
+
+    # ── Guardar reporte ──
+    with st.container(border=True):
+        st.markdown("**Guardar este análisis**")
+        col_input, col_save = st.columns([4, 1])
+        with col_input:
+            titulo_rpt = st.text_input(
+                "Título",
+                value=f"EERR {periodo_desde} – {periodo_hasta} · {sociedad_sel}",
+                label_visibility="collapsed",
+            )
+        with col_save:
+            guardar_btn = st.button("Guardar", type="primary", use_container_width=True)
+
+        if guardar_btn and titulo_rpt:
+            datos_snap = st.session_state.get("analisis_datos", {})
+            try:
+                from sqlalchemy import text as sqlt
+                from utils.db import get_engine
+                with get_engine().begin() as conn:
+                    conn.execute(sqlt("""
+                        INSERT INTO reports.reportes_guardados
+                            (titulo, tipo, periodo_desde, periodo_hasta,
+                             sociedad, datos_json, analisis_ia, creado_por)
+                        VALUES
+                            (:titulo, 'EERR', :pdesde, :phasta,
+                             :sociedad, :datos, :analisis, :usuario)
+                    """), {
+                        "titulo":   titulo_rpt,
+                        "pdesde":   periodo_desde,
+                        "phasta":   periodo_hasta,
+                        "sociedad": sociedad_sel,
+                        "datos":    json.dumps(datos_snap),
+                        "analisis": st.session_state["analisis_texto"],
+                        "usuario":  st.session_state.get("nombre", ""),
+                    })
+                st.success("✓ Reporte guardado. Ve a **Reportes Guardados** para revisarlo.")
+            except Exception as e:
+                st.error(f"Error al guardar: {e}")
