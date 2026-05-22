@@ -25,60 +25,73 @@ def inject_font():
             font-feature-settings: "liga" 0, "clig" 0 !important;
         }
 
-        /* ── AG Grid: menú de columnas (3 puntos) ── */
-        .ag-popup,
+        /* ── Menú de columnas del dataframe (cobertura total) ── */
+
+        /* Contenedor raíz del popup */
+        .ag-popup { position: absolute !important; z-index: 999999 !important; }
+        .ag-popup > * { background-color: #FFFFFF !important; }
+
+        /* Menú principal y todas sus capas */
         .ag-menu,
         .ag-column-menu,
+        .ag-menu-body,
+        .ag-menu-list,
         .ag-tabs,
         .ag-tabs-header,
-        .ag-tabs-body {
+        .ag-tabs-body,
+        .ag-tab-body,
+        .ag-menu-column-select,
+        .ag-menu-column-select-wrapper {
             background-color: #FFFFFF !important;
+            color: #0F172A !important;
+        }
+
+        /* Borde y sombra solo al contenedor más externo del menú */
+        .ag-menu {
             border: 1px solid #E2E8F0 !important;
             border-radius: 8px !important;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.12) !important;
-            z-index: 9999 !important;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12) !important;
             overflow: hidden !important;
+            z-index: 999999 !important;
         }
-        .ag-menu-list {
-            background-color: #FFFFFF !important;
-            padding: 4px 0 !important;
-        }
-        .ag-menu-option {
+
+        /* Ítems del menú */
+        .ag-menu-option,
+        .ag-menu-option-part {
             background-color: #FFFFFF !important;
             color: #0F172A !important;
             font-size: 13px !important;
-            padding: 6px 14px !important;
-            cursor: pointer !important;
         }
-        .ag-menu-option:hover,
-        .ag-menu-option-active {
-            background-color: #F1F5F9 !important;
-            color: #0F172A !important;
-        }
-        .ag-menu-option-icon {
-            color: #94A3B8 !important;
-        }
+        .ag-menu-option:hover { background-color: #F1F5F9 !important; }
+        .ag-menu-option--active { background-color: #F1F5F9 !important; }
+        .ag-menu-option-icon { color: #94A3B8 !important; background: transparent !important; }
+        .ag-menu-separator { border-color: #E2E8F0 !important; }
+
+        /* Tabs (Filtrar / Columnas) */
         .ag-tab {
             background-color: #FFFFFF !important;
             color: #94A3B8 !important;
             border-bottom: 2px solid transparent !important;
-            padding: 6px 12px !important;
         }
-        .ag-tab-selected {
+        .ag-tab--selected, .ag-tab-selected {
             color: #c4007a !important;
             border-bottom-color: #c4007a !important;
-        }
-        .ag-filter {
             background-color: #FFFFFF !important;
-            padding: 8px !important;
         }
-        .ag-filter input {
-            background-color: #F1F5F9 !important;
+
+        /* Input de filtro */
+        .ag-filter,
+        .ag-filter-body,
+        .ag-filter-body-wrapper { background-color: #FFFFFF !important; }
+        .ag-filter input, .ag-floating-filter-input {
+            background-color: #F7F8FA !important;
             border: 1px solid #E2E8F0 !important;
             border-radius: 6px !important;
             color: #0F172A !important;
-            padding: 4px 8px !important;
         }
+
+        /* Forzar overflow visible en el stDataFrame para que el popup no quede cortado */
+        [data-testid="stDataFrame"] > div { overflow: visible !important; }
 
         /* ── Sidebar oscuro aplicado directamente por CSS ── */
         [data-testid="stSidebar"] {
