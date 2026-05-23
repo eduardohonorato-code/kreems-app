@@ -10,6 +10,7 @@ from utils.auth import login
 from utils.db import query
 from utils.components import header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill, badge_html, boton_excel
 from utils.ai import generar_analisis_eerr
+from utils.pdf_report import generar_pdf_eerr
 
 _ANO = date.today().year
 
@@ -153,6 +154,33 @@ dfin    = -(fin_r - fin_p)             # favorable si > 0 (menos gasto)
 dnooper = -(nooper_r - nooper_p)       # favorable si > 0 (menos gasto)
 var_total = un_r - un_p
 
+# ── GRÁFICO PUENTE (se construye aquí para usarlo también en PDF) ─
+_bridge_labels  = [
+    "Ppto\nU. Neta", "△ Ventas", "△ Costo\nVar.",
+    "△ Costo\nFijo", "△ OPEX", "△ G.\nFin.",
+    "△ G. No\nOper.", "Real\nU. Neta",
+]
+_bridge_measure = ["absolute","relative","relative","relative","relative","relative","relative","total"]
+_bridge_values  = [un_p, dv, dcv, dcf, dopex, dfin, dnooper, un_r]
+
+import plotly.graph_objects as _go
+fig_bridge = _go.Figure(_go.Waterfall(
+    orientation="v", measure=_bridge_measure,
+    x=_bridge_labels, y=[v/1_000_000 for v in _bridge_values],
+    connector={"line":{"color":"#e0c8e8","width":1,"dash":"dot"}},
+    increasing={"marker":{"color":"#0F6E56","line":{"color":"#0a5240","width":1}}},
+    decreasing={"marker":{"color":"#c4007a","line":{"color":"#8f005a","width":1}}},
+    totals={"marker":{"color":"#2d0050","line":{"color":"#1a0030","width":1}}},
+    texttemplate="%{y:+.2f}M", textfont={"size":11,"color":"#333"}, textposition="outside",
+))
+fig_bridge.update_layout(
+    height=420, margin=dict(t=30,b=20,l=10,r=10),
+    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+    yaxis=dict(tickprefix="$",ticksuffix="M",gridcolor="#f5eef8",zeroline=True,zerolinecolor="#d8c8e8",zerolinewidth=1.5),
+    xaxis=dict(tickfont={"size":10}), showlegend=False,
+    font=dict(family="Inter, Arial, sans-serif",size=11,color="#555"),
+)
+
 # ── TABS PRINCIPALES ─────────────────────────────────────────
 tab_pl, tab_bridge, tab_comp = st.tabs([
     "📋  P&L",
@@ -255,48 +283,6 @@ with tab_bridge:
     col_chart, col_detalle = st.columns([3, 2])
 
     with col_chart:
-        bridge_labels  = [
-            "Ppto\nU. Neta", "△ Ventas", "△ Costo\nVar.",
-            "△ Costo\nFijo", "△ OPEX", "△ G.\nFin.",
-            "△ G. No\nOper.", "Real\nU. Neta",
-        ]
-        bridge_measure = [
-            "absolute", "relative", "relative",
-            "relative", "relative", "relative",
-            "relative", "total",
-        ]
-        bridge_values  = [un_p, dv, dcv, dcf, dopex, dfin, dnooper, un_r]
-
-        fig_bridge = go.Figure(go.Waterfall(
-            orientation  = "v",
-            measure      = bridge_measure,
-            x            = bridge_labels,
-            y            = [v / 1_000_000 for v in bridge_values],
-            connector    = {"line": {"color": "#e0c8e8", "width": 1, "dash": "dot"}},
-            increasing   = {"marker": {"color": "#0F6E56", "line": {"color": "#0a5240", "width": 1}}},
-            decreasing   = {"marker": {"color": "#c4007a", "line": {"color": "#8f005a", "width": 1}}},
-            totals       = {"marker": {"color": "#2d0050", "line": {"color": "#1a0030", "width": 1}}},
-            texttemplate = "%{y:+.2f}M",
-            textfont     = {"size": 11, "color": "#333"},
-            textposition = "outside",
-        ))
-        fig_bridge.update_layout(
-            height      = 420,
-            margin      = dict(t=30, b=20, l=10, r=10),
-            paper_bgcolor = "rgba(0,0,0,0)",
-            plot_bgcolor  = "rgba(0,0,0,0)",
-            yaxis = dict(
-                tickprefix  = "$",
-                ticksuffix  = "M",
-                gridcolor   = "#f5eef8",
-                zeroline    = True,
-                zerolinecolor = "#d8c8e8",
-                zerolinewidth = 1.5,
-            ),
-            xaxis = dict(tickfont={"size": 10}),
-            showlegend = False,
-            font = dict(family="Inter, Arial, sans-serif", size=11, color="#555"),
-        )
         st.plotly_chart(fig_bridge, use_container_width=True)
 
     with col_detalle:
@@ -422,25 +408,47 @@ st.markdown("##### Análisis IA")
 if "analisis_texto" not in st.session_state:
     st.session_state["analisis_texto"] = ""
 
-col_btn_ia, col_btn_cerrar, _ = st.columns([2, 1, 2])
+col_btn_ia, col_btn_pdf, col_btn_cerrar, _ = st.columns([2, 1.2, 1, 1.5])
+
+# ── Datos IA compartidos ──────────────────────────────────────
+_datos_ia_base = {
+    "ventas_r": ventas_r, "ventas_p": ventas_p,
+    "cv_r":     cv_r,     "cv_p":     cv_p,
+    "cf_r":     cf_r,     "cf_p":     cf_p,
+    "opex_r":   opex_r,   "opex_p":   opex_p,
+    "fin_r":    fin_r,    "fin_p":    fin_p,
+    "nooper_r": nooper_r, "nooper_p": nooper_p,
+    "ub_r":     ub_r,     "ub_p":     ub_p,
+    "ebit_r":   ebit_r,   "ebit_p":   ebit_p,
+    "un_r":     un_r,     "un_p":     un_p,
+    "periodo_desde": periodo_desde,
+    "periodo_hasta": periodo_hasta,
+    "sociedad": sociedad_sel,
+}
 
 with col_btn_ia:
     if st.button("Generar Análisis con IA", type="primary", use_container_width=True):
-        datos_ia = {
-            "ventas_r": ventas_r, "ventas_p": ventas_p,
-            "cv_r":     cv_r,     "cv_p":     cv_p,
-            "cf_r":     cf_r,     "cf_p":     cf_p,
-            "opex_r":   opex_r,   "opex_p":   opex_p,
-            "ub_r":     ub_r,     "ub_p":     ub_p,
-            "ebit_r":   ebit_r,   "ebit_p":   ebit_p,
-            "un_r":     un_r,     "un_p":     un_p,
-            "periodo_desde": periodo_desde,
-            "periodo_hasta": periodo_hasta,
-            "sociedad": sociedad_sel,
-        }
         with st.spinner("Analizando datos con IA..."):
-            st.session_state["analisis_texto"] = generar_analisis_eerr(datos_ia)
-            st.session_state["analisis_datos"] = datos_ia
+            st.session_state["analisis_texto"] = generar_analisis_eerr(_datos_ia_base)
+            st.session_state["analisis_datos"] = _datos_ia_base
+
+with col_btn_pdf:
+    if st.button("📄 Exportar PDF", use_container_width=True):
+        with st.spinner("Generando PDF..."):
+            pdf_bytes = generar_pdf_eerr(
+                _datos_ia_base,
+                analisis_texto=st.session_state.get("analisis_texto", ""),
+                fig_bridge=fig_bridge,
+            )
+        nombre_pdf = f"EERR_{periodo_desde}_{periodo_hasta}_{sociedad_sel}.pdf"
+        st.download_button(
+            label="⬇ Descargar PDF",
+            data=pdf_bytes,
+            file_name=nombre_pdf,
+            mime="application/pdf",
+            use_container_width=True,
+            key="dl_pdf_eerr",
+        )
 
 if st.session_state["analisis_texto"]:
     with col_btn_cerrar:

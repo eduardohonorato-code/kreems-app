@@ -52,6 +52,9 @@ cards = [
     ("📈", "Proyección al Cierre",
      "Forecast del año completo con tres métodos: tendencia, estacionalidad y manual.",
      "pages/8_proyeccion_cierre.py"),
+    ("📅", "Presupuesto Mensual",
+     "Vista y edición del presupuesto distribuido mes a mes por CC y cuenta contable.",
+     "pages/9_presupuesto_mensual.py"),
 ]
 
 # Tarjeta de admin solo visible para admins
