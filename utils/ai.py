@@ -69,9 +69,14 @@ def generar_analisis_eerr(datos: dict) -> str:
     sociedad = datos.get("sociedad", "Consolidado")
     periodo  = f"{datos['periodo_desde']} a {datos['periodo_hasta']}"
 
-    prompt = f"""Eres un controller financiero senior de una empresa chilena. \
-Analiza el siguiente Estado de Resultados Real vs Presupuesto y redacta un \
-informe ejecutivo breve y directo en español.
+    prompt = f"""Eres un controller financiero senior de una empresa chilena.
+Analiza el siguiente Estado de Resultados Real vs Presupuesto y redacta un informe ejecutivo breve y directo en español.
+
+REGLAS DE INTERPRETACIÓN (aplícalas siempre):
+- VENTAS: ejecución >100% = POSITIVO (se vendió más de lo planeado). Ejecución <100% = NEGATIVO.
+- COSTOS (Costo Variable, Costo Fijo, OPEX): ejecución >100% = NEGATIVO (se gastó más de lo presupuestado). Ejecución <100% = POSITIVO (ahorro).
+- MÁRGENES y UTILIDADES (Utilidad Bruta, EBIT, Utilidad Neta): ejecución >100% = POSITIVO. Ejecución <100% = NEGATIVO.
+- No confundas: un costo con 60% de ejecución es buena noticia, no un problema.
 
 EMPRESA: {sociedad}
 PERIODO: {periodo}
@@ -144,6 +149,13 @@ def generar_analisis_cc(datos: dict) -> str:
     prompt = f"""Eres un controller financiero senior de una empresa chilena.
 Analiza el siguiente cuadro de Centro de Costos Real vs Presupuesto y redacta un análisis ejecutivo breve en español.
 
+REGLA FUNDAMENTAL DE CONTROL DE COSTOS (debes aplicarla siempre):
+- En centros de costo, el objetivo es NO gastar más de lo presupuestado.
+- Ejecución BAJA (ej. 50-70%) = POSITIVO: la empresa está gastando bien por debajo del límite, hay holgura presupuestaria.
+- Ejecución ALTA cercana a 100% = SEÑAL DE ALERTA: el centro está cerca de agotar su presupuesto y cualquier gasto adicional lo superará.
+- Ejecución SUPERIOR a 100% = CRÍTICO: el centro ya superó su presupuesto.
+- Por lo tanto: el CC con MEJOR comportamiento es el de MENOR % de ejecución. El CC de MAYOR RIESGO es el de ejecución más cercana o superior al 100%.
+
 EMPRESA: {sociedad} | PERIODO: {periodo}
 
 | Centro de Costo | Real | Presupuesto | % Ejec. |
@@ -154,19 +166,19 @@ EMPRESA: {sociedad} | PERIODO: {periodo}
 Estructura tu respuesta exactamente así:
 
 RESUMEN EJECUTIVO
-(2 oraciones sobre el desempeño global de costos.)
+(2 oraciones sobre el desempeño global de costos, aplicando la regla de control de costos.)
 
 HALLAZGOS CLAVE
-1. (CC con mayor desviación y monto concreto)
-2. (CC con mejor comportamiento)
-3. (Observación relevante)
+1. (CC con mayor riesgo: el de ejecución más alta, cercana o sobre 100%, con monto concreto)
+2. (CC con mejor control: el de menor % de ejecución, destacando la holgura)
+3. (Observación relevante sobre el total o tendencia)
 
 ALERTAS
-(CCs con ejecución >100%. Si todos están bajo control escribe "Sin alertas críticas.")
+(CCs con ejecución >85%, ordenados de mayor a menor riesgo. Si todos están bajo 85% escribe "Sin alertas críticas.")
 
 RECOMENDACIONES
-1. (Acción concreta)
-2. (Acción concreta)
+1. (Acción concreta para el CC de mayor riesgo)
+2. (Acción concreta a nivel general)
 
 Sé directo. Usa $M. No repitas datos sin interpretarlos."""
 
@@ -208,11 +220,18 @@ def generar_analisis_cuentas(datos: dict) -> str:
     prompt = f"""Eres un controller financiero senior de una empresa chilena.
 Analiza el siguiente resumen de Control por Cuenta Contable y redacta un análisis ejecutivo breve en español.
 
+REGLA FUNDAMENTAL DE CONTROL DE COSTOS (aplícala siempre):
+- Estas son cuentas de COSTO/GASTO. El objetivo es no superar el presupuesto asignado.
+- Ejecución BAJA (ej. 50-70%) = BUENO: gasto controlado, holgura disponible.
+- Ejecución ≥85% = ALERTA: la cuenta está próxima a su límite presupuestario.
+- Ejecución ≥100% = CRÍTICO: la cuenta ya superó su presupuesto.
+- Las cuentas "bien controladas" son las de menor % de ejecución. Las "críticas" son las de mayor %.
+
 EMPRESA: {sociedad} | PERIODO: {periodo}
 TOTAL REAL: ${total_r/1e6:,.1f}M | TOTAL PRESUPUESTO: ${total_p/1e6:,.1f}M | EJECUCIÓN: {(total_r/total_p*100) if total_p else 0:.1f}%
-CUENTAS ANALIZADAS: {n_cuentas} | CUENTAS CON ALERTA (≥85%): {n_alertas}
+CUENTAS ANALIZADAS: {n_cuentas} | CUENTAS EN ALERTA (≥85%): {n_alertas}
 
-TOP CUENTAS CON MAYOR DESVIACIÓN:
+TOP CUENTAS DE MAYOR RIESGO (mayor % de ejecución):
 | Cuenta | Real | Presupuesto | % Ejec. |
 |--------|------|-------------|---------|
 {tabla}
@@ -220,19 +239,19 @@ TOP CUENTAS CON MAYOR DESVIACIÓN:
 Estructura tu respuesta exactamente así:
 
 RESUMEN EJECUTIVO
-(2 oraciones sobre el estado global.)
+(2 oraciones sobre el estado global, aplicando la regla de costos.)
 
 HALLAZGOS CLAVE
-1. (Cuenta con mayor sobreejecución y cifra concreta)
-2. (Patrón o tendencia relevante)
-3. (Cuenta o área bien controlada)
+1. (Cuenta con mayor % de ejecución, más cercana o sobre presupuesto — es la más riesgosa)
+2. (Patrón o tendencia relevante en el conjunto de cuentas)
+3. (Observación positiva: cuentas bien controladas o con buena holgura)
 
 ALERTAS
-(Cuentas críticas con cifras. Si no hay escribe "Sin alertas críticas.")
+(Cuentas con ejecución ≥85%, de mayor a menor riesgo. Si ninguna llega a 85% escribe "Sin alertas críticas.")
 
 RECOMENDACIONES
-1. (Acción concreta)
-2. (Acción concreta)
+1. (Acción concreta para la cuenta más crítica)
+2. (Acción preventiva general)
 
 Sé directo. Usa $M. No más de 250 palabras."""
 
