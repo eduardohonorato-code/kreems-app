@@ -9,6 +9,7 @@ from utils.auth import login
 from utils.db import query
 from utils.components import header, selector_meses, sidebar_kreems, fmt_mill, cc_card, boton_excel
 from utils.ai import generar_analisis_cc
+from utils.notas import guardar_nota, obtener_notas, eliminar_nota
 
 st.set_page_config(page_title="Centro de Costos · Kreems", page_icon="💜", layout="wide")
 
@@ -135,6 +136,86 @@ with col_res:
             {"Centro de Costos": df_show},
             f"CC_{periodo_desde}_{periodo_hasta}",
         )
+
+st.markdown("<br>", unsafe_allow_html=True)
+
+# ── NOTAS DE GESTIÓN ──────────────────────────────────────────
+st.markdown("---")
+st.markdown("##### 📝 Notas de Gestión")
+
+_usuario = st.session_state.get("nombre", "")
+_notas_cc = obtener_notas(periodo_desde, periodo_hasta, sociedad_sel, tipo="CC")
+
+col_form_cc, col_notas_cc = st.columns([1, 1])
+
+with col_form_cc:
+    st.markdown("**Agregar / editar nota**")
+    opciones_nota = {v: k for k, v in NOMBRES_CC.items()}   # nombre → código
+    cc_nota_sel = st.selectbox(
+        "Centro de Costo",
+        list(NOMBRES_CC.values()),
+        key="cc_nota_sel",
+        label_visibility="collapsed",
+    )
+    texto_nota = ""
+    # Pre-cargar nota existente si hay
+    if not _notas_cc.empty:
+        cc_codigo = opciones_nota.get(cc_nota_sel, cc_nota_sel)
+        fila = _notas_cc[_notas_cc["referencia"] == cc_codigo]
+        if not fila.empty:
+            texto_nota = fila.iloc[0]["nota"]
+
+    nota_input = st.text_area(
+        "Nota",
+        value=texto_nota,
+        placeholder="Ej: Incremento por contratación de personal temporal en temporada alta...",
+        height=110,
+        key="cc_nota_input",
+        label_visibility="collapsed",
+    )
+    col_save_cc, col_clear_cc = st.columns([2, 1])
+    with col_save_cc:
+        if st.button("💾 Guardar nota", type="primary", use_container_width=True, key="cc_nota_guardar"):
+            if nota_input.strip():
+                cc_codigo = opciones_nota.get(cc_nota_sel, cc_nota_sel)
+                guardar_nota(
+                    periodo_desde, periodo_hasta, sociedad_sel,
+                    "CC", cc_codigo, nota_input.strip(), _usuario,
+                )
+                st.success(f"✓ Nota guardada para {cc_nota_sel}")
+                st.rerun()
+            else:
+                st.warning("Escribe una nota antes de guardar.")
+
+with col_notas_cc:
+    st.markdown("**Notas registradas en este período**")
+    if _notas_cc.empty:
+        st.markdown(
+            "<div style='color:#aaa; font-size:13px; padding:12px 0;'>Sin notas para este período.</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        for _, nr in _notas_cc.iterrows():
+            nombre_ref = NOMBRES_CC.get(nr["referencia"], nr["referencia"])
+            fecha_fmt  = pd.Timestamp(nr["actualizado_en"]).strftime("%d/%m %H:%M") if pd.notna(nr["actualizado_en"]) else ""
+            col_nota_txt, col_nota_del = st.columns([10, 1])
+            with col_nota_txt:
+                st.markdown(f"""
+                <div style="background:#fafafa; border:1px solid #e2e8f0;
+                            border-left:4px solid #c4007a; border-radius:8px;
+                            padding:10px 14px; margin-bottom:8px;">
+                    <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                        <span style="font-size:12px; font-weight:700; color:#2d0050;">{nombre_ref}</span>
+                        <span style="font-size:10px; color:#aaa;">{nr['creado_por']} · {fecha_fmt}</span>
+                    </div>
+                    <div style="font-size:12px; color:#444; line-height:1.5;">{nr['nota']}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with col_nota_del:
+                st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+                if st.button("🗑", key=f"del_nota_cc_{nr['id']}", help="Eliminar esta nota"):
+                    eliminar_nota(int(nr["id"]))
+                    st.rerun()
 
 st.markdown("<br>", unsafe_allow_html=True)
 
