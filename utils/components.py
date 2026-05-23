@@ -146,6 +146,15 @@ def inject_font():
         [data-testid="stSidebar"] .stCheckbox p {
             color: #C8BEE0 !important;
         }
+
+        /* ── Ocultar íconos Material Icons en page_link (fallan en Streamlit Cloud) ── */
+        [data-testid="stPageLink"] [data-testid="stPageLinkIcon"],
+        [data-testid="stPageLink"] span.material-symbols-rounded,
+        [data-testid="stPageLink"] span.material-icons,
+        [data-testid="stSidebar"] [data-testid="stPageLink"] span[style*="font-family: Material"],
+        [data-testid="stSidebar"] [data-testid="stPageLink"] span[class*="material"] {
+            display: none !important;
+        }
     </style>
     """, unsafe_allow_html=True)
 
@@ -389,13 +398,13 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
                     padding:0 4px 4px; text-transform:uppercase;">VISTA</div>
         """, unsafe_allow_html=True)
 
-        st.page_link("app.py",                    label="Inicio",                      use_container_width=True)
-        st.page_link("pages/1_dashboard.py",      label="Resumen Ejecutivo",           use_container_width=True)
-        st.page_link("pages/2_eerr.py",           label="Estado de Resultados",        use_container_width=True)
-        st.page_link("pages/3_centro_costos.py",  label="Centro de Costos",            use_container_width=True)
-        st.page_link("pages/4_control_cuentas.py",label="Control por Cuenta Contable", use_container_width=True)
-        st.page_link("pages/6_reportes.py",          label="Reportes Guardados",          use_container_width=True)
-        st.page_link("pages/8_proyeccion_cierre.py", label="📈  Proyección al Cierre",     use_container_width=True)
+        st.page_link("app.py",                       label="🏠  Inicio",                    use_container_width=True)
+        st.page_link("pages/1_dashboard.py",         label="📊  Resumen Ejecutivo",          use_container_width=True)
+        st.page_link("pages/2_eerr.py",              label="📋  Estado de Resultados",       use_container_width=True)
+        st.page_link("pages/3_centro_costos.py",     label="🏢  Centro de Costos",           use_container_width=True)
+        st.page_link("pages/4_control_cuentas.py",   label="📑  Control Cuentas Contables",  use_container_width=True)
+        st.page_link("pages/6_reportes.py",          label="🤖  Reportes Guardados",         use_container_width=True)
+        st.page_link("pages/8_proyeccion_cierre.py", label="📈  Proyección al Cierre",       use_container_width=True)
 
         rol = st.session_state.get("rol", "")
         if rol == "admin":
