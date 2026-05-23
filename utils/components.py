@@ -200,6 +200,28 @@ def inject_font():
             color: #c4007a !important;
         }
     </style>
+    <script>
+    (function() {
+        function fixSidebarIcons() {
+            document.querySelectorAll('button').forEach(function(btn) {
+                btn.querySelectorAll('span').forEach(function(span) {
+                    if (span.textContent.trim().startsWith('keyboard_')) {
+                        span.style.cssText = 'font-size:0!important;opacity:0!important;position:absolute!important;';
+                        if (!btn.querySelector('.kreems-icon')) {
+                            var ic = document.createElement('span');
+                            ic.className = 'kreems-icon';
+                            ic.textContent = '☰';
+                            ic.style.cssText = 'font-size:16px;font-family:Arial,sans-serif;pointer-events:none;';
+                            btn.appendChild(ic);
+                        }
+                    }
+                });
+            });
+        }
+        fixSidebarIcons();
+        new MutationObserver(fixSidebarIcons).observe(document.body, {childList:true, subtree:true});
+    })();
+    </script>
     """, unsafe_allow_html=True)
 
 
