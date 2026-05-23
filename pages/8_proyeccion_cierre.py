@@ -49,11 +49,11 @@ df_mensual = query(f"""
         SUM(valor_real) AS real,
         SUM(valor_ppto) AS ppto
     FROM marts.vw_real_vs_ppto
-    WHERE EXTRACT(YEAR FROM periodo::date) = {_ANO}
+    WHERE periodo BETWEEN :desde AND :hasta
       {filtro_soc}
     GROUP BY periodo, clasificacion
     ORDER BY periodo, clasificacion
-""", {})
+""", {"desde": f"{_ANO}-01", "hasta": f"{_ANO}-12"})
 
 if df_mensual.empty:
     st.info("Sin datos disponibles para el año en curso.")
