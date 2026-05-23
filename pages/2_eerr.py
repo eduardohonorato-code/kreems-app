@@ -113,13 +113,7 @@ for col, (label, real, ppto_v) in zip([col1, col2, col3, col4], cards):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── TABLA EERR ───────────────────────────────────────────────
-col_tit_eerr, col_exp_eerr = st.columns([4, 1])
-with col_tit_eerr:
-    st.markdown("##### Estado de Resultados")
-with col_exp_eerr:
-    _boton_eerr = st.empty()  # se llena después de construir df_eerr
-
+# ── CONSTRUIR df_eerr (necesario antes de los tabs) ──────────
 filas = [
     ("Ventas",                  ventas_r, ventas_p, False, False),
     ("Costo de Venta",          cv_r,     cv_p,     True,  False),
@@ -150,120 +144,279 @@ df_eerr = pd.DataFrame(rows)
 subtotales_idx = df_eerr.index[df_eerr["_subtotal"]].tolist()
 df_show = df_eerr.drop(columns=["_subtotal", "_inv"])
 
-# Botón export (placeholder relleno aquí donde ya tenemos df_show)
-with _boton_eerr:
-    boton_excel(
-        {"EERR": df_show},
-        f"EERR_{periodo_desde}_{periodo_hasta}",
+# ── VARIANZAS para el puente ──────────────────────────────────
+dv      = ventas_r - ventas_p          # favorable si > 0 (más ingresos)
+dcv     = -(cv_r - cv_p)               # favorable si > 0 (menos costo)
+dcf     = -(cf_r - cf_p)               # favorable si > 0 (menos costo)
+dopex   = -(opex_r - opex_p)           # favorable si > 0 (menos gasto)
+dfin    = -(fin_r - fin_p)             # favorable si > 0 (menos gasto)
+dnooper = -(nooper_r - nooper_p)       # favorable si > 0 (menos gasto)
+var_total = un_r - un_p
+
+# ── TABS PRINCIPALES ─────────────────────────────────────────
+tab_pl, tab_bridge, tab_comp = st.tabs([
+    "📋  P&L",
+    "📊  Puente de Varianzas",
+    "📈  Composición del Resultado",
+])
+
+# ╔══════════════════════════════════════════╗
+# ║  TAB 1 — P&L                             ║
+# ╚══════════════════════════════════════════╝
+with tab_pl:
+    col_tit_pl, col_exp_pl = st.columns([4, 1])
+    with col_tit_pl:
+        st.markdown("##### Estado de Resultados")
+    with col_exp_pl:
+        boton_excel(
+            {"EERR": df_show},
+            f"EERR_{periodo_desde}_{periodo_hasta}",
+        )
+
+    def color_fila_idx(row):
+        if row.name in subtotales_idx:
+            return ["font-weight:bold; background:#fdf5fb; color:#2d0050"] * len(row)
+        return [""] * len(row)
+
+    def color_varianza(val):
+        if not isinstance(val, (int, float)):
+            return ""
+        return "color:#0F6E56;font-weight:500" if val >= 0 else "color:#cc0000;font-weight:500"
+
+    def color_pct(val):
+        if not isinstance(val, (int, float)):
+            return ""
+        return "color:#0F6E56" if val <= 100 else "color:#cc0000; font-weight:600"
+
+    st.dataframe(
+        df_show.style
+            .format({
+                "Real":        lambda v: fmt_clp(v),
+                "Presupuesto": lambda v: fmt_clp(v),
+                "Varianza":    lambda v: fmt_clp(v),
+                "% Ejec.":     lambda v: f"{v:.1f}%"
+            })
+            .apply(color_fila_idx, axis=1)
+            .map(color_varianza, subset=["Varianza"])
+            .map(color_pct, subset=["% Ejec."]),
+        use_container_width=True,
+        hide_index=True,
+        height=380,
     )
 
-def color_fila_idx(row):
-    if row.name in subtotales_idx:
-        return ["font-weight:bold; background:#fdf5fb; color:#2d0050"] * len(row)
-    return [""] * len(row)
+    st.markdown("<br>", unsafe_allow_html=True)
 
-def color_varianza(val):
-    if not isinstance(val, (int, float)):
-        return ""
-    return "color:#0F6E56;font-weight:500" if val >= 0 else "color:#cc0000;font-weight:500"
+    # ── Ratios financieros ────────────────────────────────────
+    st.markdown("##### Ratios Financieros")
+    ratios = [
+        ("Margen Bruto",  (ub_r / ventas_r * 100) if ventas_r else 0,
+                          (ub_p / ventas_p * 100) if ventas_p else 0),
+        ("Margen EBIT",   (ebit_r / ventas_r * 100) if ventas_r else 0,
+                          (ebit_p / ventas_p * 100) if ventas_p else 0),
+        ("Margen Neto",   (un_r / ventas_r * 100) if ventas_r else 0,
+                          (un_p / ventas_p * 100) if ventas_p else 0),
+        ("OPEX / Ventas", (opex_r / ventas_r * 100) if ventas_r else 0,
+                          (opex_p / ventas_p * 100) if ventas_p else 0),
+        ("CV / Ventas",   (cv_r / ventas_r * 100) if ventas_r else 0,
+                          (cv_p / ventas_p * 100) if ventas_p else 0),
+    ]
+    cols_r = st.columns(len(ratios))
+    for col, (nombre, r_val, p_val) in zip(cols_r, ratios):
+        diff = r_val - p_val
+        inv  = nombre in ("OPEX / Ventas", "CV / Ventas")
+        ok   = (diff <= 0) if inv else (diff >= 0)
+        color = "#0F6E56" if ok else "#cc0000"
+        icono = "↓" if diff < 0 else "↑"
+        with col:
+            st.markdown(f"""
+            <div style="background:#f5f7fa; border-radius:10px; padding:10px 12px;
+                        text-align:center; border:1px solid #e2e8f0;">
+                <div style="font-size:10px; color:#888; margin-bottom:4px;">{nombre}</div>
+                <div style="font-size:16px; font-weight:700; color:#2d0050;">{r_val:.1f}%</div>
+                <div style="font-size:10px; color:{color};">{icono} {abs(diff):.1f}pp</div>
+                <div style="font-size:10px; color:#aaa;">Obj: {p_val:.1f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
 
-def color_pct(val):
-    if not isinstance(val, (int, float)):
-        return ""
-    return "color:#0F6E56" if val <= 100 else "color:#cc0000; font-weight:600"
+# ╔══════════════════════════════════════════╗
+# ║  TAB 2 — PUENTE DE VARIANZAS             ║
+# ╚══════════════════════════════════════════╝
+with tab_bridge:
+    color_tot = "#0F6E56" if var_total >= 0 else "#cc0000"
+    signo_tot = "+" if var_total >= 0 else ""
 
-st.dataframe(
-    df_show.style
-        .format({
-            "Real":        lambda v: fmt_clp(v),
-            "Presupuesto": lambda v: fmt_clp(v),
-            "Varianza":    lambda v: fmt_clp(v),
-            "% Ejec.":     lambda v: f"{v:.1f}%"
-        })
-        .apply(color_fila_idx, axis=1)
-        .map(color_varianza, subset=["Varianza"])
-        .map(color_pct, subset=["% Ejec."]),
-    use_container_width=True,
-    hide_index=True,
-    height=480,
-)
+    st.markdown("##### Puente de Varianzas — Presupuesto → Real (Utilidad Neta)")
+    st.caption(
+        "Muestra cómo cada línea del P&L contribuyó a la diferencia entre la "
+        "Utilidad Neta presupuestada y la real. 🟢 Verde = impacto favorable · 🔴 Rosa = impacto desfavorable."
+    )
+    st.markdown("<br>", unsafe_allow_html=True)
 
-st.markdown("<br>", unsafe_allow_html=True)
+    col_chart, col_detalle = st.columns([3, 2])
 
-# ── RATIOS FINANCIEROS ────────────────────────────────────────
-st.markdown("##### Ratios Financieros")
-ratios = [
-    ("Margen Bruto",  (ub_r / ventas_r * 100) if ventas_r else 0,
-                      (ub_p / ventas_p * 100) if ventas_p else 0),
-    ("Margen EBIT",   (ebit_r / ventas_r * 100) if ventas_r else 0,
-                      (ebit_p / ventas_p * 100) if ventas_p else 0),
-    ("Margen Neto",   (un_r / ventas_r * 100) if ventas_r else 0,
-                      (un_p / ventas_p * 100) if ventas_p else 0),
-    ("OPEX / Ventas", (opex_r / ventas_r * 100) if ventas_r else 0,
-                      (opex_p / ventas_p * 100) if ventas_p else 0),
-    ("CV / Ventas",   (cv_r / ventas_r * 100) if ventas_r else 0,
-                      (cv_p / ventas_p * 100) if ventas_p else 0),
-]
-cols_r = st.columns(len(ratios))
-for col, (nombre, r_val, p_val) in zip(cols_r, ratios):
-    diff = r_val - p_val
-    inv  = nombre in ("OPEX / Ventas", "CV / Ventas")
-    ok   = (diff <= 0) if inv else (diff >= 0)
-    color = "#0F6E56" if ok else "#cc0000"
-    icono = "↓" if diff < 0 else "↑"
-    with col:
+    with col_chart:
+        bridge_labels  = [
+            "Ppto\nU. Neta", "△ Ventas", "△ Costo\nVar.",
+            "△ Costo\nFijo", "△ OPEX", "△ G.\nFin.",
+            "△ G. No\nOper.", "Real\nU. Neta",
+        ]
+        bridge_measure = [
+            "absolute", "relative", "relative",
+            "relative", "relative", "relative",
+            "relative", "total",
+        ]
+        bridge_values  = [un_p, dv, dcv, dcf, dopex, dfin, dnooper, un_r]
+
+        fig_bridge = go.Figure(go.Waterfall(
+            orientation  = "v",
+            measure      = bridge_measure,
+            x            = bridge_labels,
+            y            = [v / 1_000_000 for v in bridge_values],
+            connector    = {"line": {"color": "#e0c8e8", "width": 1, "dash": "dot"}},
+            increasing   = {"marker": {"color": "#0F6E56", "line": {"color": "#0a5240", "width": 1}}},
+            decreasing   = {"marker": {"color": "#c4007a", "line": {"color": "#8f005a", "width": 1}}},
+            totals       = {"marker": {"color": "#2d0050", "line": {"color": "#1a0030", "width": 1}}},
+            texttemplate = "%{y:+.2f}M",
+            textfont     = {"size": 11, "color": "#333"},
+            textposition = "outside",
+        ))
+        fig_bridge.update_layout(
+            height      = 420,
+            margin      = dict(t=30, b=20, l=10, r=10),
+            paper_bgcolor = "rgba(0,0,0,0)",
+            plot_bgcolor  = "rgba(0,0,0,0)",
+            yaxis = dict(
+                tickprefix  = "$",
+                ticksuffix  = "M",
+                gridcolor   = "#f5eef8",
+                zeroline    = True,
+                zerolinecolor = "#d8c8e8",
+                zerolinewidth = 1.5,
+            ),
+            xaxis = dict(tickfont={"size": 10}),
+            showlegend = False,
+            font = dict(family="Inter, Arial, sans-serif", size=11, color="#555"),
+        )
+        st.plotly_chart(fig_bridge, use_container_width=True)
+
+    with col_detalle:
+        st.markdown("**Detalle de contribuciones**")
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+        detalles = [
+            ("Ventas",           dv,      "Más ingresos" if dv >= 0 else "Menos ingresos"),
+            ("Costo Variable",   dcv,     "Menor costo"  if dcv >= 0 else "Mayor costo"),
+            ("Costo Fijo",       dcf,     "Menor costo"  if dcf >= 0 else "Mayor costo"),
+            ("OPEX",             dopex,   "Menor gasto"  if dopex >= 0 else "Mayor gasto"),
+            ("G. Financieros",   dfin,    "Menor gasto"  if dfin >= 0 else "Mayor gasto"),
+            ("G. No Operac.",    dnooper, "Menor gasto"  if dnooper >= 0 else "Mayor gasto"),
+        ]
+
+        for nombre, val, desc in detalles:
+            color  = "#0F6E56" if val >= 0 else "#c4007a"
+            signo  = "+" if val >= 0 else ""
+            icono  = "▲" if val >= 0 else "▼"
+            bg     = "rgba(15,110,86,0.06)" if val >= 0 else "rgba(196,0,122,0.06)"
+            st.markdown(f"""
+            <div style="display:flex; justify-content:space-between; align-items:center;
+                        padding:9px 12px; margin-bottom:5px;
+                        background:{bg}; border-radius:8px;
+                        border-left:3px solid {color};">
+                <div>
+                    <div style="font-size:12px; font-weight:600; color:#333;">{nombre}</div>
+                    <div style="font-size:10px; color:{color};">{icono} {desc}</div>
+                </div>
+                <div style="font-size:14px; font-weight:700; color:{color};">
+                    {signo}${val/1_000_000:,.2f}M
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        # Total varianza
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
         st.markdown(f"""
-        <div style="background:#f5f7fa; border-radius:10px; padding:10px 12px;
-                    text-align:center; border:1px solid #e2e8f0;">
-            <div style="font-size:10px; color:#888; margin-bottom:4px;">{nombre}</div>
-            <div style="font-size:16px; font-weight:700; color:#2d0050;">{r_val:.1f}%</div>
-            <div style="font-size:10px; color:{color};">{icono} {abs(diff):.1f}pp</div>
-            <div style="font-size:10px; color:#aaa;">Obj: {p_val:.1f}%</div>
+        <div style="display:flex; justify-content:space-between; align-items:center;
+                    padding:12px 14px; border-radius:10px;
+                    background:#f5f0fb; border:1.5px solid #2d0050;">
+            <div>
+                <div style="font-size:12px; color:#888; font-weight:600;">VARIANZA TOTAL</div>
+                <div style="font-size:10px; color:#888;">Utilidad Neta Real vs Presupuesto</div>
+            </div>
+            <div style="font-size:18px; font-weight:800; color:{color_tot};">
+                {signo_tot}${var_total/1_000_000:,.2f}M
+            </div>
         </div>
         """, unsafe_allow_html=True)
 
-st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ── WATERFALL ─────────────────────────────────────────────────
-st.markdown("##### Composición del Resultado (Real)")
-col_wf, _ = st.columns([2, 1])
+        # Mini tabla contexto
+        st.markdown(f"""
+        <div style="display:flex; justify-content:space-between; padding:6px 14px;
+                    background:#fafafa; border-radius:8px; border:1px solid #e2e8f0;">
+            <div style="text-align:center;">
+                <div style="font-size:10px; color:#aaa;">Ppto U. Neta</div>
+                <div style="font-size:13px; font-weight:700; color:#555;">${un_p/1_000_000:,.2f}M</div>
+            </div>
+            <div style="font-size:18px; color:#ccc; padding-top:6px;">→</div>
+            <div style="text-align:center;">
+                <div style="font-size:10px; color:#aaa;">Real U. Neta</div>
+                <div style="font-size:13px; font-weight:700; color:#2d0050;">${un_r/1_000_000:,.2f}M</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with col_wf:
-    wf_labels  = ["Ventas", "- Costo Var.", "Util. Bruta", "- C. Fijo", "- OPEX",
-                  "EBIT", "- G. Fin.", "- G. No Op.", "Util. Neta"]
-    wf_measure = ["absolute", "relative", "total", "relative", "relative",
-                  "total", "relative", "relative", "total"]
-    wf_values  = [ventas_r, -cv_r, ub_r, -cf_r, -opex_r, ebit_r, -fin_r, -nooper_r, un_r]
+# ╔══════════════════════════════════════════╗
+# ║  TAB 3 — COMPOSICIÓN DEL RESULTADO      ║
+# ╚══════════════════════════════════════════╝
+with tab_comp:
+    st.markdown("##### Composición del Resultado (Real)")
+    st.caption("Cascade del P&L real: cómo se llega de las Ventas a la Utilidad Neta.")
+    st.markdown("<br>", unsafe_allow_html=True)
 
-    fig_wf = go.Figure(go.Waterfall(
-        orientation="v",
-        measure=wf_measure,
-        x=wf_labels,
-        y=[v / 1_000_000 for v in wf_values],
-        connector={"line": {"color": "#e0c8e8", "width": 1, "dash": "dot"}},
-        increasing={"marker": {"color": "#0F6E56"}},
-        decreasing={"marker": {"color": "#c4007a"}},
-        totals={"marker": {"color": "#2d0050"}},
-        texttemplate="%{y:.1f}M",
-        textfont={"size": 10},
-        textposition="outside",
-    ))
-    fig_wf.update_layout(
-        height=260,
-        margin=dict(t=20, b=10, l=10, r=10),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        yaxis=dict(tickprefix="$", ticksuffix="M", gridcolor="#f5eef8",
-                   zeroline=True, zerolinecolor="#e8d8f0"),
-        xaxis=dict(tickfont={"size": 10}),
-        showlegend=False,
-        font=dict(family="Inter, Arial, sans-serif", size=11, color="#555")
-    )
-    st.plotly_chart(fig_wf, use_container_width=True)
+    col_wf, _ = st.columns([2, 1])
+    with col_wf:
+        wf_labels  = ["Ventas", "- Costo Var.", "Util. Bruta", "- C. Fijo", "- OPEX",
+                      "EBIT", "- G. Fin.", "- G. No Op.", "Util. Neta"]
+        wf_measure = ["absolute", "relative", "total", "relative", "relative",
+                      "total", "relative", "relative", "total"]
+        wf_values  = [ventas_r, -cv_r, ub_r, -cf_r, -opex_r, ebit_r, -fin_r, -nooper_r, un_r]
+
+        fig_wf = go.Figure(go.Waterfall(
+            orientation  = "v",
+            measure      = wf_measure,
+            x            = wf_labels,
+            y            = [v / 1_000_000 for v in wf_values],
+            connector    = {"line": {"color": "#e0c8e8", "width": 1, "dash": "dot"}},
+            increasing   = {"marker": {"color": "#0F6E56"}},
+            decreasing   = {"marker": {"color": "#c4007a"}},
+            totals       = {"marker": {"color": "#2d0050"}},
+            texttemplate = "%{y:.1f}M",
+            textfont     = {"size": 10},
+            textposition = "outside",
+        ))
+        fig_wf.update_layout(
+            height      = 300,
+            margin      = dict(t=20, b=10, l=10, r=10),
+            paper_bgcolor = "rgba(0,0,0,0)",
+            plot_bgcolor  = "rgba(0,0,0,0)",
+            yaxis = dict(
+                tickprefix  = "$",
+                ticksuffix  = "M",
+                gridcolor   = "#f5eef8",
+                zeroline    = True,
+                zerolinecolor = "#e8d8f0",
+            ),
+            xaxis      = dict(tickfont={"size": 10}),
+            showlegend = False,
+            font       = dict(family="Inter, Arial, sans-serif", size=11, color="#555"),
+        )
+        st.plotly_chart(fig_wf, use_container_width=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── ANÁLISIS IA ───────────────────────────────────────────────
+st.markdown("---")
 st.markdown("##### Análisis IA")
 
 if "analisis_texto" not in st.session_state:
