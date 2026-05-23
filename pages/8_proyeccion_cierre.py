@@ -99,14 +99,14 @@ metodo = st.radio(
     key="metodo_forecast",
 )
 
-with st.expander("Ver descripción de cada método", expanded=False):
-    st.markdown("""
-    - **Tendencia Lineal** — Calcula el promedio mensual real YTD y lo multiplica por los meses restantes.
-      `Forecast = Real YTD + (Real YTD ÷ meses con datos) × meses restantes`
-    - **Estacionalidad Presupuestada** — Ajusta los meses restantes según el ritmo de ejecución actual vs el presupuesto.
-      `Forecast = Real YTD + Presupuesto Restante × (Real YTD ÷ Presupuesto YTD)`
-    - **Ingreso Manual** — Tú defines directamente el estimado de cierre para cada línea del P&L.
-    """)
+st.markdown("""
+<div style="background:#f8f5ff; border:1px solid #e8dff5; border-radius:8px;
+            padding:12px 18px; font-size:12px; color:#555; margin-bottom:8px; line-height:1.8;">
+    <b>📐 Tendencia Lineal</b> — Promedio mensual real × meses restantes &nbsp;·&nbsp;
+    <b>📊 Estacionalidad</b> — Real YTD + Presupuesto restante ajustado por ritmo actual &nbsp;·&nbsp;
+    <b>✏️ Manual</b> — Tú ingresas el estimado de cierre por línea
+</div>
+""", unsafe_allow_html=True)
 
 st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
