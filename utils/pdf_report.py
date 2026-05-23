@@ -1,5 +1,5 @@
 """
-Generación de reporte PDF del Estado de Resultados.
+Generación de reporte PDF del Estado de Resultados — 1 página.
 Dependencias: fpdf2, kaleido (para gráficos Plotly → PNG)
 """
 from __future__ import annotations
@@ -30,7 +30,7 @@ def _color_var(v: float, inv: bool = False) -> tuple:
     return C_GREEN if v >= 0 else C_RED
 
 
-def _try_get_chart_png(fig, width: int = 550, height: int = 280) -> bytes | None:
+def _try_get_chart_png(fig, width: int = 550, height: int = 260) -> bytes | None:
     """Intenta renderizar figura Plotly como PNG. Retorna None si falla."""
     try:
         import plotly.io as pio
@@ -41,7 +41,7 @@ def _try_get_chart_png(fig, width: int = 550, height: int = 280) -> bytes | None
 
 def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> bytes:
     """
-    Genera PDF del Estado de Resultados.
+    Genera PDF del Estado de Resultados (1 página).
 
     datos debe contener:
         ventas_r, ventas_p, cv_r, cv_p, cf_r, cf_p,
@@ -65,7 +65,7 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
     sociedad  = datos.get("sociedad", "Consolidado")
     p_desde   = datos.get("periodo_desde", "")
     p_hasta   = datos.get("periodo_hasta", "")
-    periodo   = p_desde if p_desde == p_hasta else f"{p_desde} — {p_hasta}"
+    periodo   = p_desde if p_desde == p_hasta else f"{p_desde} - {p_hasta}"
 
     mb_r    = (ub_r   / ventas_r * 100) if ventas_r else 0
     mb_p    = (ub_p   / ventas_p * 100) if ventas_p else 0
@@ -98,14 +98,14 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
             pass
 
         def footer(self):
-            self.set_y(-14)
-            self.set_font(FONT_NAME, "I", 8)
+            self.set_y(-12)
+            self.set_font(FONT_NAME, "I", 7)
             self.set_text_color(*C_GRAY)
             txt = f"Kreems FP&A  -  Generado el {_date.today().strftime('%d/%m/%Y')}  -  Pag. {self.page_no()}"
-            self.cell(0, 6, txt, align="C")
+            self.cell(0, 5, txt, align="C")
 
     pdf = KreemsPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=16)
+    pdf.set_auto_page_break(auto=False)   # control manual: 1 sola página
 
     # Intentar cargar fuente TTF Unicode
     _unicode_ok = False
@@ -129,89 +129,84 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
     pdf.add_page()
     pdf.set_margins(14, 14, 14)
 
-    # ── Cabecera ───────────────────────────────────────────────
+    # ── Cabecera (altura reducida a 24mm) ──────────────────────
     pdf.set_fill_color(*C_PURPLE)
-    pdf.rect(0, 0, 210, 28, style="F")
-    pdf.set_y(7)
-    pdf.set_font(FONT_NAME, "B", 16)
+    pdf.rect(0, 0, 210, 24, style="F")
+    pdf.set_y(5)
+    pdf.set_font(FONT_NAME, "B", 14)
     pdf.set_text_color(*C_WHITE)
-    pdf.cell(0, 8, T("KREEMS FP&A"), ln=True, align="C")
-    pdf.set_font(FONT_NAME, "", 10)
-    pdf.cell(0, 6, T("Estado de Resultados — Real vs Presupuesto"), ln=True, align="C")
-    pdf.ln(4)
+    pdf.cell(0, 7, T("KREEMS FP&A"), ln=True, align="C")
+    pdf.set_font(FONT_NAME, "", 9)
+    pdf.cell(0, 5, T("Estado de Resultados - Real vs Presupuesto"), ln=True, align="C")
+    pdf.ln(2)
 
     # ── Metadatos ──────────────────────────────────────────────
     pdf.set_fill_color(*C_LIGHT)
-    pdf.rect(14, 30, 182, 10, style="F")
-    pdf.set_y(32)
-    pdf.set_font(FONT_NAME, "", 9)
+    pdf.rect(14, 26, 182, 9, style="F")
+    pdf.set_y(28)
+    pdf.set_font(FONT_NAME, "", 8.5)
     pdf.set_text_color(*C_PURPLE)
-    pdf.cell(60, 6, T(f"Periodo:  {periodo}"), ln=False)
-    pdf.cell(60, 6, T(f"Sociedad:  {sociedad}"), ln=False, align="C")
-    pdf.cell(62, 6, T(f"Fecha:  {_date.today().strftime('%d/%m/%Y')}"), ln=False, align="R")
-    pdf.ln(12)
+    pdf.cell(60, 5, T(f"Periodo:  {periodo}"), ln=False)
+    pdf.cell(60, 5, T(f"Sociedad:  {sociedad}"), ln=False, align="C")
+    pdf.cell(62, 5, T(f"Fecha:  {_date.today().strftime('%d/%m/%Y')}"), ln=False, align="R")
+    pdf.ln(9)
 
-    # ── Sección KPIs ───────────────────────────────────────────
+    # ── helper título de sección ──────────────────────────────
     def _section_title(txt: str):
-        pdf.set_font(FONT_NAME, "B", 10)
+        pdf.set_font(FONT_NAME, "B", 9)
         pdf.set_text_color(*C_PURPLE)
         pdf.set_fill_color(*C_PURPLE)
-        pdf.rect(14, pdf.get_y(), 4, 6, style="F")
-        pdf.set_x(20)
-        pdf.cell(0, 6, T(txt), ln=True)
-        pdf.ln(2)
+        pdf.rect(14, pdf.get_y(), 3, 5.5, style="F")
+        pdf.set_x(19)
+        pdf.cell(0, 5.5, T(txt), ln=True)
+        pdf.ln(1)
 
+    # ── KPIs ──────────────────────────────────────────────────
     _section_title("INDICADORES CLAVE")
 
     kpis = [
-        ("Ventas",         ventas_r, ventas_p, False),
-        ("Util. Bruta",    ub_r,     ub_p,     False),
-        ("EBIT",           ebit_r,   ebit_p,   False),
-        ("Util. Neta",     un_r,     un_p,     False),
+        ("Ventas",      ventas_r, ventas_p, False),
+        ("Util. Bruta", ub_r,     ub_p,     False),
+        ("EBIT",        ebit_r,   ebit_p,   False),
+        ("Util. Neta",  un_r,     un_p,     False),
     ]
     box_w = 43
-    box_h = 22
+    box_h = 20
     x0    = 14
     y0    = pdf.get_y()
 
     for i, (label, real, ppto, inv) in enumerate(kpis):
-        x = x0 + i * (box_w + 2)
+        x         = x0 + i * (box_w + 2)
         variacion = real - ppto
         pct_v     = (real / ppto * 100) if ppto else 0
         color     = C_GREEN if variacion >= 0 else C_RED
-        signo     = "▲" if variacion >= 0 else "▼"
 
-        # borde
         pdf.set_draw_color(*C_BORDER)
         pdf.set_fill_color(*C_WHITE)
         pdf.rect(x, y0, box_w, box_h, style="FD")
 
-        # label
-        pdf.set_xy(x, y0 + 2)
-        pdf.set_font(FONT_NAME, "", 7)
+        pdf.set_xy(x, y0 + 1.5)
+        pdf.set_font(FONT_NAME, "", 6.5)
         pdf.set_text_color(*C_GRAY)
-        pdf.cell(box_w, 4, T(label.upper()), align="C")
+        pdf.cell(box_w, 3.5, T(label.upper()), align="C")
 
-        # valor real
-        pdf.set_xy(x, y0 + 6)
-        pdf.set_font(FONT_NAME, "B", 11)
+        pdf.set_xy(x, y0 + 5)
+        pdf.set_font(FONT_NAME, "B", 10)
         pdf.set_text_color(*C_PURPLE)
-        pdf.cell(box_w, 6, T(_fmt_m(real)), align="C")
+        pdf.cell(box_w, 5.5, T(_fmt_m(real)), align="C")
 
-        # variacion
-        pdf.set_xy(x, y0 + 13)
-        pdf.set_font(FONT_NAME, "", 8)
+        pdf.set_xy(x, y0 + 11)
+        pdf.set_font(FONT_NAME, "", 7.5)
         pdf.set_text_color(*color)
         signo_txt = "(+)" if variacion >= 0 else "(-)"
         pdf.cell(box_w, 4, T(f"{signo_txt} {_fmt_m(abs(variacion))} ({pct_v:.1f}%)"), align="C")
 
-        # objetivo
-        pdf.set_xy(x, y0 + 18)
-        pdf.set_font(FONT_NAME, "", 7)
+        pdf.set_xy(x, y0 + 16)
+        pdf.set_font(FONT_NAME, "", 6.5)
         pdf.set_text_color(*C_GRAY)
         pdf.cell(box_w, 3, T(f"Obj: {_fmt_m(ppto)}"), align="C")
 
-    pdf.set_y(y0 + box_h + 6)
+    pdf.set_y(y0 + box_h + 4)
 
     # ── Tabla P&L ──────────────────────────────────────────────
     _section_title("ESTADO DE RESULTADOS")
@@ -228,18 +223,18 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
         ("Utilidad Neta",           un_r,     un_p,     False, True),
     ]
 
-    col_w = [62, 32, 32, 32, 24]
+    col_w    = [62, 32, 32, 32, 24]
     headers_t = ["Concepto", "Real", "Presupuesto", "Varianza", "% Ejec."]
 
-    # encabezado tabla
     pdf.set_fill_color(*C_PURPLE)
     pdf.set_text_color(*C_WHITE)
-    pdf.set_font(FONT_NAME, "B", 8)
+    pdf.set_font(FONT_NAME, "B", 7.5)
     for i, (h, w) in enumerate(zip(headers_t, col_w)):
         align = "L" if i == 0 else "R"
-        pdf.cell(w, 7, T(h), border=0, fill=True, align=align)
+        pdf.cell(w, 6, T(h), border=0, fill=True, align=align)
     pdf.ln()
 
+    ROW_H = 6.0
     for idx, (nombre, real, ppto, inv, subtotal) in enumerate(filas_eerr):
         variacion = real - ppto
         pct_v     = (real / ppto * 100) if ppto else 0
@@ -251,23 +246,21 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
 
         pdf.set_fill_color(*fill)
         pdf.set_text_color(*C_PURPLE if subtotal else (30, 30, 30))
-        pdf.set_font(FONT_NAME, "B" if subtotal else "", 8)
+        pdf.set_font(FONT_NAME, "B" if subtotal else "", 7.5)
 
-        pdf.cell(col_w[0], 6.5, T(nombre),       fill=True, align="L")
-        pdf.cell(col_w[1], 6.5, T(_fmt_m(real)), fill=True, align="R")
-        pdf.cell(col_w[2], 6.5, T(_fmt_m(ppto)), fill=True, align="R")
+        pdf.cell(col_w[0], ROW_H, T(nombre),       fill=True, align="L")
+        pdf.cell(col_w[1], ROW_H, T(_fmt_m(real)), fill=True, align="R")
+        pdf.cell(col_w[2], ROW_H, T(_fmt_m(ppto)), fill=True, align="R")
 
-        # varianza coloreada
         pdf.set_text_color(*c_var)
         signo = "+" if variacion >= 0 else ""
-        pdf.cell(col_w[3], 6.5, T(f"{signo}{_fmt_m(variacion)}"), fill=True, align="R")
+        pdf.cell(col_w[3], ROW_H, T(f"{signo}{_fmt_m(variacion)}"), fill=True, align="R")
 
-        # % ejecución
         pdf.set_text_color(*(C_GREEN if pct_v <= 100 else C_RED))
-        pdf.cell(col_w[4], 6.5, T(_fmt_pct(pct_v)), fill=True, align="R")
+        pdf.cell(col_w[4], ROW_H, T(_fmt_pct(pct_v)), fill=True, align="R")
         pdf.ln()
 
-    pdf.ln(4)
+    pdf.ln(3)
 
     # ── Ratios ─────────────────────────────────────────────────
     _section_title("RATIOS FINANCIEROS")
@@ -282,61 +275,71 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
                           (opex_p / ventas_p * 100) if ventas_p else 0, True),
     ]
 
-    r_w = 36
-    y_r = pdf.get_y()
+    r_w  = 36
+    r_h  = 14          # altura de cada cajita de ratio
+    y_r  = pdf.get_y()
     for i, (label, rv, pv, inv) in enumerate(ratios):
-        x = 14 + i * (r_w + 2)
+        x     = 14 + i * (r_w + 2)
         diff  = rv - pv
         ok    = (diff <= 0) if inv else (diff >= 0)
         color = C_GREEN if ok else C_RED
 
         pdf.set_draw_color(*C_BORDER)
         pdf.set_fill_color(*C_WHITE)
-        pdf.rect(x, y_r, r_w, 16, style="FD")
+        pdf.rect(x, y_r, r_w, r_h, style="FD")
 
         pdf.set_xy(x, y_r + 1)
-        pdf.set_font(FONT_NAME, "", 7)
+        pdf.set_font(FONT_NAME, "", 6.5)
         pdf.set_text_color(*C_GRAY)
-        pdf.cell(r_w, 4, T(label), align="C")
+        pdf.cell(r_w, 3.5, T(label), align="C")
 
-        pdf.set_xy(x, y_r + 5)
-        pdf.set_font(FONT_NAME, "B", 10)
+        pdf.set_xy(x, y_r + 4.5)
+        pdf.set_font(FONT_NAME, "B", 9.5)
         pdf.set_text_color(*C_PURPLE)
-        pdf.cell(r_w, 5, T(f"{rv:.1f}%"), align="C")
+        pdf.cell(r_w, 4.5, T(f"{rv:.1f}%"), align="C")
 
-        pdf.set_xy(x, y_r + 10)
-        pdf.set_font(FONT_NAME, "", 7.5)
+        pdf.set_xy(x, y_r + 9)
+        pdf.set_font(FONT_NAME, "", 7)
         pdf.set_text_color(*color)
         icono_txt = "(-)" if diff < 0 else "(+)"
         pdf.cell(r_w, 4, T(f"{icono_txt} {abs(diff):.1f}pp  |  Obj: {pv:.1f}%"), align="C")
 
-    pdf.set_y(y_r + 22)
+    pdf.set_y(y_r + r_h + 3)
 
     # ── Puente de Varianzas (gráfico PNG) ──────────────────────
     if fig_bridge is not None:
-        png = _try_get_chart_png(fig_bridge, width=700, height=320)
-        if png:
+        png = _try_get_chart_png(fig_bridge, width=700, height=260)
+        if png and pdf.get_y() < 230:
             _section_title("PUENTE DE VARIANZAS")
-            pdf.image(io.BytesIO(png), x=14, y=pdf.get_y(), w=182)
-            pdf.set_y(pdf.get_y() + 82)
+            chart_h = min(68, 282 - pdf.get_y())  # no sobrepasar página
+            pdf.image(io.BytesIO(png), x=14, y=pdf.get_y(), w=182, h=chart_h)
+            pdf.set_y(pdf.get_y() + chart_h + 3)
 
-    # ── Análisis IA ────────────────────────────────────────────
-    if analisis_texto.strip():
-        if pdf.get_y() > 220:
-            pdf.add_page()
-        _section_title("ANÁLISIS IA")
-        pdf.set_fill_color(*C_LIGHT)
-        pdf.set_draw_color(*C_PURPLE)
-        y_ia = pdf.get_y()
-        pdf.set_font(FONT_NAME, "", 8.5)
+    # ── Análisis IA — sin salto de página, se corta al borde ───
+    if analisis_texto.strip() and pdf.get_y() < 275:
+        _section_title("ANALISIS IA")
+        y_ia       = pdf.get_y()
+        page_limit = 283  # margen inferior efectivo en mm (A4=297, footer≈14)
+
+        # Fuente más compacta para aprovechar espacio
+        pdf.set_font(FONT_NAME, "", 7.5)
         pdf.set_text_color(50, 50, 50)
         pdf.set_left_margin(18)
         pdf.set_right_margin(14)
-        pdf.multi_cell(0, 5, T(analisis_texto), border=0)
-        # borde lateral izquierdo
+
+        # Escribir línea a línea; parar si se llega al límite
+        line_h    = 4.2
+        for line in T(analisis_texto).split("\n"):
+            if pdf.get_y() + line_h > page_limit:
+                break
+            pdf.multi_cell(0, line_h, line, border=0)
+
+        # Barra lateral morada proporcional al texto escrito
         h_ia = pdf.get_y() - y_ia
-        pdf.set_fill_color(*C_PURPLE)
-        pdf.rect(14, y_ia, 3, h_ia, style="F")
+        if h_ia > 0:
+            pdf.set_fill_color(*C_PURPLE)
+            pdf.rect(14, y_ia, 3, h_ia, style="F")
+
         pdf.set_left_margin(14)
         pdf.set_right_margin(14)
 
