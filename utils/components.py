@@ -148,13 +148,21 @@ def inject_font():
             color: #C8BEE0 !important;
         }
 
-        /* ── Botón colapsar sidebar ── */
-        [data-testid="stSidebarCollapseButton"] {
-            color: rgba(200,190,224,0.6) !important;
+        /* ── Botón colapsar sidebar — ocultar texto Material Icons y reemplazar ── */
+        [data-testid="stSidebarCollapseButton"] span,
+        [data-testid="stSidebarNavItems"] span[class*="material"],
+        button[data-testid="stBaseButton-headerNoPadding"] span {
+            font-size: 0 !important;
+            visibility: hidden !important;
         }
-        [data-testid="stSidebarCollapseButton"]:hover {
-            color: #FFFFFF !important;
-            background: rgba(255,255,255,0.08) !important;
+        [data-testid="stSidebarCollapseButton"]::after {
+            content: "◀";
+            font-size: 14px !important;
+            visibility: visible !important;
+            color: rgba(200,190,224,0.7);
+        }
+        [data-testid="stSidebarCollapseButton"]:hover::after {
+            color: #FFFFFF;
         }
     </style>
     """, unsafe_allow_html=True)
