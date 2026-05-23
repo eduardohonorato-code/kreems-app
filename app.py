@@ -49,6 +49,9 @@ cards = [
     ("🤖", "Reportes Guardados",
      "Análisis IA guardados del Estado de Resultados. Revisa y compara períodos.",
      "pages/6_reportes.py"),
+    ("📈", "Proyección al Cierre",
+     "Forecast del año completo con tres métodos: tendencia, estacionalidad y manual.",
+     "pages/8_proyeccion_cierre.py"),
 ]
 
 # Tarjeta de admin solo visible para admins

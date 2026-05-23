@@ -34,7 +34,8 @@ kreems_app/
 │   ├── 4_control_cuentas.py    # Control por Cuenta Contable
 │   ├── 5_cargar_datos.py       # Carga de archivos Excel (solo admin)
 │   ├── 6_reportes.py           # Reportes IA guardados
-│   └── 7_admin_usuarios.py     # Administración de usuarios (solo admin)
+│   ├── 7_admin_usuarios.py     # Administración de usuarios (solo admin)
+│   └── 8_proyeccion_cierre.py  # Forecast / Proyección al Cierre del año
 ├── utils/
 │   ├── auth.py                 # Autenticación (PostgreSQL + fallback secrets)
 │   ├── components.py           # Componentes reutilizables (sidebar, KPIs, selector meses)
@@ -93,6 +94,14 @@ kreems_app/
 - KPI cards resumidas por reporte
 - Toggle para ver/ocultar el análisis completo
 - Eliminación de reportes
+
+### 📈 Proyección al Cierre
+- Proyecta el P&L completo al 31/12 usando los meses reales disponibles
+- Tres métodos seleccionables: **Tendencia Lineal**, **Estacionalidad Presupuestada** y **Manual**
+- KPI cards: Ventas, Utilidad Bruta, EBIT y Utilidad Neta proyectadas vs presupuesto anual
+- Gráfico de barras apiladas Real YTD + Forecast restante vs Presupuesto Anual
+- Tabla completa con semáforo (✅ ⚠️ 🔴) por línea del P&L
+- Export a Excel
 
 ### ⬆️ Cargar Datos _(solo admin)_
 - Carga de Excel de ventas reales (ACUÑA, Gran Natural)

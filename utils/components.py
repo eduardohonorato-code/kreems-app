@@ -394,7 +394,8 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
         st.page_link("pages/2_eerr.py",           label="Estado de Resultados",        use_container_width=True)
         st.page_link("pages/3_centro_costos.py",  label="Centro de Costos",            use_container_width=True)
         st.page_link("pages/4_control_cuentas.py",label="Control por Cuenta Contable", use_container_width=True)
-        st.page_link("pages/6_reportes.py",        label="Reportes Guardados",          use_container_width=True)
+        st.page_link("pages/6_reportes.py",          label="Reportes Guardados",          use_container_width=True)
+        st.page_link("pages/8_proyeccion_cierre.py", label="📈  Proyección al Cierre",     use_container_width=True)
 
         rol = st.session_state.get("rol", "")
         if rol == "admin":
