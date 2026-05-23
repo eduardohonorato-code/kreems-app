@@ -148,21 +148,32 @@ def inject_font():
             color: #C8BEE0 !important;
         }
 
-        /* ── Botón colapsar sidebar — ocultar texto Material Icons y reemplazar ── */
-        [data-testid="stSidebarCollapseButton"] span,
-        [data-testid="stSidebarNavItems"] span[class*="material"],
-        button[data-testid="stBaseButton-headerNoPadding"] span {
+        /* ── Botón colapsar/expandir sidebar ── */
+        [data-testid="stSidebarCollapseButton"] {
+            width: 2rem !important;
+            height: 2rem !important;
+            overflow: hidden !important;
+            position: relative !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+        }
+        [data-testid="stSidebarCollapseButton"] span {
             font-size: 0 !important;
-            visibility: hidden !important;
+            opacity: 0 !important;
+            position: absolute !important;
+            pointer-events: none !important;
         }
-        [data-testid="stSidebarCollapseButton"]::after {
-            content: "◀";
-            font-size: 14px !important;
-            visibility: visible !important;
-            color: rgba(200,190,224,0.7);
+        [data-testid="stSidebarCollapseButton"]::before {
+            content: "☰";
+            font-size: 17px !important;
+            font-family: Arial, sans-serif !important;
+            color: rgba(200,190,224,0.75) !important;
+            display: block !important;
+            line-height: 1 !important;
         }
-        [data-testid="stSidebarCollapseButton"]:hover::after {
-            color: #FFFFFF;
+        [data-testid="stSidebarCollapseButton"]:hover::before {
+            color: #FFFFFF !important;
         }
     </style>
     """, unsafe_allow_html=True)
