@@ -168,30 +168,17 @@ def inject_font():
         }
         [data-testid="stSidebarCollapseButton"]:hover::before { color: #FFFFFF !important; }
 
-        /* ── Botón expandir sidebar — cubrir todos los posibles data-testid ── */
-        [data-testid="stSidebarCollapsedControl"] span,
-        [data-testid="collapsedControl"] span,
-        [data-testid="stSidebarOpenButton"] span,
-        [data-testid="stSidebarNavCollapseIcon"] span,
-        button[aria-label="Open sidebar"] span,
-        button[aria-label="Abrir barra lateral"] span,
-        [data-testid="stSidebar"][aria-expanded="false"] ~ div button span {
+        /* ── Botón expandir sidebar (fuera del sidebar, cuando está colapsado) ── */
+        [data-testid="stExpandSidebarButton"] {
+            width: 2rem !important; height: 2rem !important;
+            overflow: hidden !important; position: relative !important;
+            border-radius: 6px !important;
+        }
+        [data-testid="stExpandSidebarButton"] span {
             font-size: 0 !important; opacity: 0 !important;
             position: absolute !important; pointer-events: none !important;
         }
-        [data-testid="stSidebarCollapsedControl"] button,
-        [data-testid="collapsedControl"] button,
-        [data-testid="stSidebarOpenButton"],
-        button[aria-label="Open sidebar"],
-        button[aria-label="Abrir barra lateral"] {
-            width: 2rem !important; height: 2rem !important;
-            overflow: hidden !important; position: relative !important;
-        }
-        [data-testid="stSidebarCollapsedControl"] button::before,
-        [data-testid="collapsedControl"] button::before,
-        [data-testid="stSidebarOpenButton"]::before,
-        button[aria-label="Open sidebar"]::before,
-        button[aria-label="Abrir barra lateral"]::before {
+        [data-testid="stExpandSidebarButton"]::before {
             content: "☰";
             font-size: 16px !important; font-family: Arial, sans-serif !important;
             color: #2d0050 !important;
@@ -199,36 +186,8 @@ def inject_font():
             top: 50% !important; left: 50% !important;
             transform: translate(-50%, -50%) !important;
         }
-
-        /* Último recurso: cualquier botón con span que contenga "keyboard_" via :has() */
-        button:has(span:not([class])) span:only-child {
-            font-size: 0 !important;
-            opacity: 0 !important;
-            position: absolute !important;
-        }
+        [data-testid="stExpandSidebarButton"]:hover::before { color: #c4007a !important; }
     </style>
-    <script>
-    (function() {
-        function fixSidebarIcons() {
-            document.querySelectorAll('button').forEach(function(btn) {
-                btn.querySelectorAll('span').forEach(function(span) {
-                    if (span.textContent.trim().startsWith('keyboard_')) {
-                        span.style.cssText = 'font-size:0!important;opacity:0!important;position:absolute!important;';
-                        if (!btn.querySelector('.kreems-icon')) {
-                            var ic = document.createElement('span');
-                            ic.className = 'kreems-icon';
-                            ic.textContent = '☰';
-                            ic.style.cssText = 'font-size:16px;font-family:Arial,sans-serif;pointer-events:none;';
-                            btn.appendChild(ic);
-                        }
-                    }
-                });
-            });
-        }
-        fixSidebarIcons();
-        new MutationObserver(fixSidebarIcons).observe(document.body, {childList:true, subtree:true});
-    })();
-    </script>
     """, unsafe_allow_html=True)
 
 
