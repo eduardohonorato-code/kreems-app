@@ -148,39 +148,19 @@ def inject_font():
             color: #C8BEE0 !important;
         }
 
-        /* ── Botón colapsar/expandir sidebar (ambos estados) ── */
-
-        /* Ocultar texto Material Icons en CUALQUIER botón de la zona header/sidebar */
-        [data-testid="stSidebarCollapseButton"] span,
-        [data-testid="stSidebarCollapsedControl"] span,
-        [data-testid="collapsedControl"] span,
-        [data-testid="stHeader"] button span,
-        [data-testid="stToolbar"] button span,
-        header button span {
-            font-size: 0 !important;
-            opacity: 0 !important;
-            position: absolute !important;
-            pointer-events: none !important;
-        }
-
-        /* Estilo base compartido para ambos botones */
-        [data-testid="stSidebarCollapseButton"],
-        [data-testid="stSidebarCollapsedControl"],
-        [data-testid="collapsedControl"],
-        [data-testid="stHeader"] button,
-        header button {
-            width: 2rem !important;
-            height: 2rem !important;
-            overflow: hidden !important;
-            position: relative !important;
+        /* ── Botón colapsar sidebar (dentro del sidebar) ── */
+        [data-testid="stSidebarCollapseButton"] {
+            width: 2rem !important; height: 2rem !important;
+            overflow: hidden !important; position: relative !important;
             border-radius: 6px !important;
         }
-
-        /* Ícono ☰ para el botón dentro del sidebar (colapsar) */
+        [data-testid="stSidebarCollapseButton"] span {
+            font-size: 0 !important; opacity: 0 !important;
+            position: absolute !important; pointer-events: none !important;
+        }
         [data-testid="stSidebarCollapseButton"]::before {
             content: "☰";
-            font-size: 16px !important;
-            font-family: Arial, sans-serif !important;
+            font-size: 16px !important; font-family: Arial, sans-serif !important;
             color: rgba(200,190,224,0.75) !important;
             position: absolute !important;
             top: 50% !important; left: 50% !important;
@@ -188,14 +168,26 @@ def inject_font():
         }
         [data-testid="stSidebarCollapseButton"]:hover::before { color: #FFFFFF !important; }
 
-        /* Ícono ☰ para el botón fuera del sidebar (expandir) */
+        /* ── Botón expandir sidebar (fuera del sidebar, cuando está colapsado) ── */
+        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="collapsedControl"] {
+            width: 2rem !important; height: 2rem !important;
+            overflow: hidden !important; position: relative !important;
+            border-radius: 6px !important;
+        }
+        [data-testid="stSidebarCollapsedControl"] span,
+        [data-testid="collapsedControl"] span,
+        [data-testid="stSidebarCollapsedControl"] button span,
+        [data-testid="collapsedControl"] button span {
+            font-size: 0 !important; opacity: 0 !important;
+            position: absolute !important; pointer-events: none !important;
+        }
         [data-testid="stSidebarCollapsedControl"]::before,
         [data-testid="collapsedControl"]::before,
-        [data-testid="stHeader"] button:first-child::before,
-        header button:first-child::before {
+        [data-testid="stSidebarCollapsedControl"] button::before,
+        [data-testid="collapsedControl"] button::before {
             content: "☰";
-            font-size: 16px !important;
-            font-family: Arial, sans-serif !important;
+            font-size: 16px !important; font-family: Arial, sans-serif !important;
             color: #2d0050 !important;
             position: absolute !important;
             top: 50% !important; left: 50% !important;
@@ -203,8 +195,8 @@ def inject_font():
         }
         [data-testid="stSidebarCollapsedControl"]:hover::before,
         [data-testid="collapsedControl"]:hover::before,
-        [data-testid="stHeader"] button:first-child:hover::before,
-        header button:first-child:hover::before {
+        [data-testid="stSidebarCollapsedControl"] button:hover::before,
+        [data-testid="collapsedControl"] button:hover::before {
             color: #c4007a !important;
         }
     </style>
