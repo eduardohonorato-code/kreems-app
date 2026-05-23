@@ -62,18 +62,25 @@ if st.session_state.get("rol") == "admin":
         "pages/7_admin_usuarios.py",
     ))
 
-n_cols = len(cards)
-cols = st.columns(n_cols)
-for col, (icono, titulo, desc, path) in zip(cols, cards):
+def _card(col, icono, titulo, desc, path):
     with col:
         st.markdown(f"""
         <div style="background:#FFFFFF;border:1px solid #E2E8F0;border-radius:14px;
-                    padding:22px 20px;height:160px;
+                    padding:22px 20px;min-height:155px;
                     box-shadow:0 1px 4px rgba(0,0,0,0.06);">
-            <div style="font-size:2rem;margin-bottom:10px;">{icono}</div>
-            <div style="font-size:15px;font-weight:700;color:#0F172A;margin-bottom:8px;">{titulo}</div>
-            <div style="font-size:12px;color:#94A3B8;line-height:1.5;">{desc}</div>
+            <div style="font-size:1.8rem;margin-bottom:8px;">{icono}</div>
+            <div style="font-size:14px;font-weight:700;color:#0F172A;margin-bottom:6px;">{titulo}</div>
+            <div style="font-size:11.5px;color:#94A3B8;line-height:1.5;">{desc}</div>
         </div>
         """, unsafe_allow_html=True)
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
         st.page_link(path, label=f"Ir a {titulo} →", use_container_width=True)
+
+# Renderizar en filas de 4
+N = 4
+for fila_idx in range(0, len(cards), N):
+    grupo = cards[fila_idx : fila_idx + N]
+    cols  = st.columns(N)
+    for col, (icono, titulo, desc, path) in zip(cols, grupo):
+        _card(col, icono, titulo, desc, path)
+    st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)

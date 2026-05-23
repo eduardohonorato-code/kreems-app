@@ -15,6 +15,7 @@ def inject_font():
     st.markdown("""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=block');
 
         html, body, [class*="css"], [class*="st-"],
         .stMarkdown, .stText, .stDataFrame,
@@ -147,13 +148,13 @@ def inject_font():
             color: #C8BEE0 !important;
         }
 
-        /* ── Ocultar íconos Material Icons en page_link (fallan en Streamlit Cloud) ── */
-        [data-testid="stPageLink"] [data-testid="stPageLinkIcon"],
-        [data-testid="stPageLink"] span.material-symbols-rounded,
-        [data-testid="stPageLink"] span.material-icons,
-        [data-testid="stSidebar"] [data-testid="stPageLink"] span[style*="font-family: Material"],
-        [data-testid="stSidebar"] [data-testid="stPageLink"] span[class*="material"] {
-            display: none !important;
+        /* ── Botón colapsar sidebar ── */
+        [data-testid="stSidebarCollapseButton"] {
+            color: rgba(200,190,224,0.6) !important;
+        }
+        [data-testid="stSidebarCollapseButton"]:hover {
+            color: #FFFFFF !important;
+            background: rgba(255,255,255,0.08) !important;
         }
     </style>
     """, unsafe_allow_html=True)
