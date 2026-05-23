@@ -168,24 +168,30 @@ def inject_font():
         }
         [data-testid="stSidebarCollapseButton"]:hover::before { color: #FFFFFF !important; }
 
-        /* ── Botón expandir sidebar (fuera del sidebar, cuando está colapsado) ── */
-        [data-testid="stSidebarCollapsedControl"],
-        [data-testid="collapsedControl"] {
-            width: 2rem !important; height: 2rem !important;
-            overflow: hidden !important; position: relative !important;
-            border-radius: 6px !important;
-        }
+        /* ── Botón expandir sidebar — cubrir todos los posibles data-testid ── */
         [data-testid="stSidebarCollapsedControl"] span,
         [data-testid="collapsedControl"] span,
-        [data-testid="stSidebarCollapsedControl"] button span,
-        [data-testid="collapsedControl"] button span {
+        [data-testid="stSidebarOpenButton"] span,
+        [data-testid="stSidebarNavCollapseIcon"] span,
+        button[aria-label="Open sidebar"] span,
+        button[aria-label="Abrir barra lateral"] span,
+        [data-testid="stSidebar"][aria-expanded="false"] ~ div button span {
             font-size: 0 !important; opacity: 0 !important;
             position: absolute !important; pointer-events: none !important;
         }
-        [data-testid="stSidebarCollapsedControl"]::before,
-        [data-testid="collapsedControl"]::before,
+        [data-testid="stSidebarCollapsedControl"] button,
+        [data-testid="collapsedControl"] button,
+        [data-testid="stSidebarOpenButton"],
+        button[aria-label="Open sidebar"],
+        button[aria-label="Abrir barra lateral"] {
+            width: 2rem !important; height: 2rem !important;
+            overflow: hidden !important; position: relative !important;
+        }
         [data-testid="stSidebarCollapsedControl"] button::before,
-        [data-testid="collapsedControl"] button::before {
+        [data-testid="collapsedControl"] button::before,
+        [data-testid="stSidebarOpenButton"]::before,
+        button[aria-label="Open sidebar"]::before,
+        button[aria-label="Abrir barra lateral"]::before {
             content: "☰";
             font-size: 16px !important; font-family: Arial, sans-serif !important;
             color: #2d0050 !important;
@@ -193,11 +199,12 @@ def inject_font():
             top: 50% !important; left: 50% !important;
             transform: translate(-50%, -50%) !important;
         }
-        [data-testid="stSidebarCollapsedControl"]:hover::before,
-        [data-testid="collapsedControl"]:hover::before,
-        [data-testid="stSidebarCollapsedControl"] button:hover::before,
-        [data-testid="collapsedControl"] button:hover::before {
-            color: #c4007a !important;
+
+        /* Último recurso: cualquier botón con span que contenga "keyboard_" via :has() */
+        button:has(span:not([class])) span:only-child {
+            font-size: 0 !important;
+            opacity: 0 !important;
+            position: absolute !important;
         }
     </style>
     <script>
