@@ -12,7 +12,7 @@ C_PINK     = (196, 0, 122)   # #c4007a
 C_GREEN    = (15, 110, 86)   # #0F6E56
 C_RED      = (204, 0,   0)   # #cc0000
 C_GRAY     = (148, 163, 184) # slate-400
-C_LIGHT    = (245, 240, 251) # fondo filas alternas
+C_LIGHT    = (252, 252, 254) # fondo filas alternas — casi blanco
 C_WHITE    = (255, 255, 255)
 C_BORDER   = (226, 232, 240)
 
@@ -156,8 +156,8 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
         pdf.set_font(FONT_NAME, "B", 9)
         pdf.set_text_color(*C_PURPLE)
         pdf.set_fill_color(*C_PURPLE)
-        pdf.rect(14, pdf.get_y(), 3, 5.5, style="F")
-        pdf.set_x(19)
+        pdf.rect(14, pdf.get_y(), 2, 5.5, style="F")
+        pdf.set_x(18)
         pdf.cell(0, 5.5, T(txt), ln=True)
         pdf.ln(1)
 
@@ -242,7 +242,7 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
 
         fill = C_LIGHT if idx % 2 == 0 else C_WHITE
         if subtotal:
-            fill = (240, 235, 250)
+            fill = (244, 241, 252)  # morado muy suave para subtotales
 
         pdf.set_fill_color(*fill)
         pdf.set_text_color(*C_PURPLE if subtotal else (30, 30, 30))
@@ -326,7 +326,7 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
         w_text = 210 - x_text - 14  # = 177mm
 
         pdf.set_font(FONT_NAME, "", 7.5)
-        pdf.set_text_color(50, 50, 50)
+        pdf.set_text_color(15, 15, 15)   # casi negro — máxima legibilidad
 
         line_h = 4.2
         for line in T(analisis_texto).split("\n"):
