@@ -319,29 +319,27 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
     if analisis_texto.strip() and pdf.get_y() < 275:
         _section_title("ANALISIS IA")
         y_ia       = pdf.get_y()
-        page_limit = 283  # margen inferior efectivo en mm (A4=297, footer≈14)
+        page_limit = 283  # margen inferior efectivo (A4=297, footer≈14)
 
-        # Fuente más compacta para aprovechar espacio
+        # Ancho explícito: margen izquierdo 19mm (espacio para barra), derecho 14mm
+        x_text = 19
+        w_text = 210 - x_text - 14  # = 177mm
+
         pdf.set_font(FONT_NAME, "", 7.5)
         pdf.set_text_color(50, 50, 50)
-        pdf.set_left_margin(18)
-        pdf.set_right_margin(14)
 
-        # Escribir línea a línea; parar si se llega al límite
-        line_h    = 4.2
+        line_h = 4.2
         for line in T(analisis_texto).split("\n"):
             if pdf.get_y() + line_h > page_limit:
                 break
-            pdf.multi_cell(0, line_h, line, border=0)
+            pdf.set_x(x_text)
+            pdf.multi_cell(w_text, line_h, line, border=0)
 
         # Barra lateral morada proporcional al texto escrito
         h_ia = pdf.get_y() - y_ia
         if h_ia > 0:
             pdf.set_fill_color(*C_PURPLE)
             pdf.rect(14, y_ia, 3, h_ia, style="F")
-
-        pdf.set_left_margin(14)
-        pdf.set_right_margin(14)
 
     # ── Output ─────────────────────────────────────────────────
     return bytes(pdf.output())
