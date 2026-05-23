@@ -74,19 +74,58 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
     mnet_r  = (un_r   / ventas_r * 100) if ventas_r else 0
     mnet_p  = (un_p   / ventas_p * 100) if ventas_p else 0
 
+    # ── fuentes Unicode (DejaVu disponible en Streamlit Cloud / Linux) ──
+    FONT_PATHS = [
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
+    ]
+    FONT_NAME = "Helvetica"  # fallback si no hay TTF
+
+    def _safe(txt: str) -> str:
+        """Reemplaza caracteres no-Latin1 si no hay fuente Unicode disponible."""
+        return (txt
+            .replace("—", "-").replace("–", "-")
+            .replace("▲", "+").replace("▼", "-")
+            .replace("△", "D").replace("✓", "OK")
+            .replace("✕", "X").replace("●", "*")
+            .encode("latin-1", errors="replace").decode("latin-1"))
+
     # ── clase PDF personalizada ────────────────────────────────
     class KreemsPDF(FPDF):
         def header(self):
-            pass  # header manual por sección
+            pass
 
         def footer(self):
             self.set_y(-14)
-            self.set_font("Helvetica", "I", 8)
+            self.set_font(FONT_NAME, "I", 8)
             self.set_text_color(*C_GRAY)
-            self.cell(0, 6, f"Kreems FP&A  ·  Generado el {_date.today().strftime('%d/%m/%Y')}  ·  Pág. {self.page_no()}", align="C")
+            txt = f"Kreems FP&A  -  Generado el {_date.today().strftime('%d/%m/%Y')}  -  Pag. {self.page_no()}"
+            self.cell(0, 6, txt, align="C")
 
     pdf = KreemsPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=True, margin=16)
+
+    # Intentar cargar fuente TTF Unicode
+    _unicode_ok = False
+    for reg_path, bold_path in FONT_PATHS:
+        try:
+            import os
+            if os.path.exists(reg_path) and os.path.exists(bold_path):
+                pdf.add_font("KreemsFont",  "",  reg_path)
+                pdf.add_font("KreemsFont", "B", bold_path)
+                pdf.add_font("KreemsFont", "I",  reg_path)
+                FONT_NAME = "KreemsFont"
+                _unicode_ok = True
+                break
+        except Exception:
+            pass
+
+    # Si no hay TTF, _safe() sanitiza strings a Latin-1
+    def T(txt: str) -> str:
+        return txt if _unicode_ok else _safe(txt)
+
     pdf.add_page()
     pdf.set_margins(14, 14, 14)
 
@@ -94,32 +133,32 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
     pdf.set_fill_color(*C_PURPLE)
     pdf.rect(0, 0, 210, 28, style="F")
     pdf.set_y(7)
-    pdf.set_font("Helvetica", "B", 16)
+    pdf.set_font(FONT_NAME, "B", 16)
     pdf.set_text_color(*C_WHITE)
-    pdf.cell(0, 8, "KREEMS FP&A", ln=True, align="C")
-    pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 6, "Estado de Resultados — Real vs Presupuesto", ln=True, align="C")
+    pdf.cell(0, 8, T("KREEMS FP&A"), ln=True, align="C")
+    pdf.set_font(FONT_NAME, "", 10)
+    pdf.cell(0, 6, T("Estado de Resultados — Real vs Presupuesto"), ln=True, align="C")
     pdf.ln(4)
 
     # ── Metadatos ──────────────────────────────────────────────
     pdf.set_fill_color(*C_LIGHT)
     pdf.rect(14, 30, 182, 10, style="F")
     pdf.set_y(32)
-    pdf.set_font("Helvetica", "", 9)
+    pdf.set_font(FONT_NAME, "", 9)
     pdf.set_text_color(*C_PURPLE)
-    pdf.cell(60, 6, f"Período:  {periodo}", ln=False)
-    pdf.cell(60, 6, f"Sociedad:  {sociedad}", ln=False, align="C")
-    pdf.cell(62, 6, f"Fecha:  {_date.today().strftime('%d/%m/%Y')}", ln=False, align="R")
+    pdf.cell(60, 6, T(f"Periodo:  {periodo}"), ln=False)
+    pdf.cell(60, 6, T(f"Sociedad:  {sociedad}"), ln=False, align="C")
+    pdf.cell(62, 6, T(f"Fecha:  {_date.today().strftime('%d/%m/%Y')}"), ln=False, align="R")
     pdf.ln(12)
 
     # ── Sección KPIs ───────────────────────────────────────────
     def _section_title(txt: str):
-        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_font(FONT_NAME, "B", 10)
         pdf.set_text_color(*C_PURPLE)
         pdf.set_fill_color(*C_PURPLE)
         pdf.rect(14, pdf.get_y(), 4, 6, style="F")
         pdf.set_x(20)
-        pdf.cell(0, 6, txt, ln=True)
+        pdf.cell(0, 6, T(txt), ln=True)
         pdf.ln(2)
 
     _section_title("INDICADORES CLAVE")
@@ -149,27 +188,28 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
 
         # label
         pdf.set_xy(x, y0 + 2)
-        pdf.set_font("Helvetica", "", 7)
+        pdf.set_font(FONT_NAME, "", 7)
         pdf.set_text_color(*C_GRAY)
-        pdf.cell(box_w, 4, label.upper(), align="C")
+        pdf.cell(box_w, 4, T(label.upper()), align="C")
 
         # valor real
         pdf.set_xy(x, y0 + 6)
-        pdf.set_font("Helvetica", "B", 11)
+        pdf.set_font(FONT_NAME, "B", 11)
         pdf.set_text_color(*C_PURPLE)
-        pdf.cell(box_w, 6, _fmt_m(real), align="C")
+        pdf.cell(box_w, 6, T(_fmt_m(real)), align="C")
 
         # variacion
         pdf.set_xy(x, y0 + 13)
-        pdf.set_font("Helvetica", "", 8)
+        pdf.set_font(FONT_NAME, "", 8)
         pdf.set_text_color(*color)
-        pdf.cell(box_w, 4, f"{signo} {_fmt_m(abs(variacion))} ({pct_v:.1f}%)", align="C")
+        signo_txt = "(+)" if variacion >= 0 else "(-)"
+        pdf.cell(box_w, 4, T(f"{signo_txt} {_fmt_m(abs(variacion))} ({pct_v:.1f}%)"), align="C")
 
         # objetivo
         pdf.set_xy(x, y0 + 18)
-        pdf.set_font("Helvetica", "", 7)
+        pdf.set_font(FONT_NAME, "", 7)
         pdf.set_text_color(*C_GRAY)
-        pdf.cell(box_w, 3, f"Obj: {_fmt_m(ppto)}", align="C")
+        pdf.cell(box_w, 3, T(f"Obj: {_fmt_m(ppto)}"), align="C")
 
     pdf.set_y(y0 + box_h + 6)
 
@@ -194,10 +234,10 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
     # encabezado tabla
     pdf.set_fill_color(*C_PURPLE)
     pdf.set_text_color(*C_WHITE)
-    pdf.set_font("Helvetica", "B", 8)
+    pdf.set_font(FONT_NAME, "B", 8)
     for i, (h, w) in enumerate(zip(headers_t, col_w)):
         align = "L" if i == 0 else "R"
-        pdf.cell(w, 7, h, border=0, fill=True, align=align)
+        pdf.cell(w, 7, T(h), border=0, fill=True, align=align)
     pdf.ln()
 
     for idx, (nombre, real, ppto, inv, subtotal) in enumerate(filas_eerr):
@@ -211,20 +251,20 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
 
         pdf.set_fill_color(*fill)
         pdf.set_text_color(*C_PURPLE if subtotal else (30, 30, 30))
-        pdf.set_font("Helvetica", "B" if subtotal else "", 8)
+        pdf.set_font(FONT_NAME, "B" if subtotal else "", 8)
 
-        pdf.cell(col_w[0], 6.5, nombre, fill=True, align="L")
-        pdf.cell(col_w[1], 6.5, _fmt_m(real),        fill=True, align="R")
-        pdf.cell(col_w[2], 6.5, _fmt_m(ppto),        fill=True, align="R")
+        pdf.cell(col_w[0], 6.5, T(nombre),       fill=True, align="L")
+        pdf.cell(col_w[1], 6.5, T(_fmt_m(real)), fill=True, align="R")
+        pdf.cell(col_w[2], 6.5, T(_fmt_m(ppto)), fill=True, align="R")
 
         # varianza coloreada
         pdf.set_text_color(*c_var)
         signo = "+" if variacion >= 0 else ""
-        pdf.cell(col_w[3], 6.5, f"{signo}{_fmt_m(variacion)}", fill=True, align="R")
+        pdf.cell(col_w[3], 6.5, T(f"{signo}{_fmt_m(variacion)}"), fill=True, align="R")
 
         # % ejecución
         pdf.set_text_color(*(C_GREEN if pct_v <= 100 else C_RED))
-        pdf.cell(col_w[4], 6.5, _fmt_pct(pct_v), fill=True, align="R")
+        pdf.cell(col_w[4], 6.5, T(_fmt_pct(pct_v)), fill=True, align="R")
         pdf.ln()
 
     pdf.ln(4)
@@ -249,26 +289,26 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
         diff  = rv - pv
         ok    = (diff <= 0) if inv else (diff >= 0)
         color = C_GREEN if ok else C_RED
-        icono = "▼" if diff < 0 else "▲"
 
         pdf.set_draw_color(*C_BORDER)
         pdf.set_fill_color(*C_WHITE)
         pdf.rect(x, y_r, r_w, 16, style="FD")
 
         pdf.set_xy(x, y_r + 1)
-        pdf.set_font("Helvetica", "", 7)
+        pdf.set_font(FONT_NAME, "", 7)
         pdf.set_text_color(*C_GRAY)
-        pdf.cell(r_w, 4, label, align="C")
+        pdf.cell(r_w, 4, T(label), align="C")
 
         pdf.set_xy(x, y_r + 5)
-        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_font(FONT_NAME, "B", 10)
         pdf.set_text_color(*C_PURPLE)
-        pdf.cell(r_w, 5, f"{rv:.1f}%", align="C")
+        pdf.cell(r_w, 5, T(f"{rv:.1f}%"), align="C")
 
         pdf.set_xy(x, y_r + 10)
-        pdf.set_font("Helvetica", "", 7.5)
+        pdf.set_font(FONT_NAME, "", 7.5)
         pdf.set_text_color(*color)
-        pdf.cell(r_w, 4, f"{icono} {abs(diff):.1f}pp  |  Obj: {pv:.1f}%", align="C")
+        icono_txt = "(-)" if diff < 0 else "(+)"
+        pdf.cell(r_w, 4, T(f"{icono_txt} {abs(diff):.1f}pp  |  Obj: {pv:.1f}%"), align="C")
 
     pdf.set_y(y_r + 22)
 
@@ -288,11 +328,11 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
         pdf.set_fill_color(*C_LIGHT)
         pdf.set_draw_color(*C_PURPLE)
         y_ia = pdf.get_y()
-        pdf.set_font("Helvetica", "", 8.5)
+        pdf.set_font(FONT_NAME, "", 8.5)
         pdf.set_text_color(50, 50, 50)
         pdf.set_left_margin(18)
         pdf.set_right_margin(14)
-        pdf.multi_cell(0, 5, analisis_texto, border=0)
+        pdf.multi_cell(0, 5, T(analisis_texto), border=0)
         # borde lateral izquierdo
         h_ia = pdf.get_y() - y_ia
         pdf.set_fill_color(*C_PURPLE)
