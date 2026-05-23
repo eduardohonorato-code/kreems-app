@@ -99,7 +99,7 @@ metodo = st.radio(
     key="metodo_forecast",
 )
 
-with st.expander("¿Cómo funciona cada método?", expanded=False):
+with st.expander("Ver descripción de cada método", expanded=False):
     st.markdown("""
     - **Tendencia Lineal** — Calcula el promedio mensual real YTD y lo multiplica por los meses restantes.
       `Forecast = Real YTD + (Real YTD ÷ meses con datos) × meses restantes`
