@@ -8,7 +8,10 @@ import json
 from datetime import date
 from utils.auth import login
 from utils.db import query
-from utils.components import header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill, badge_html, boton_excel
+from utils.components import (
+    header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill,
+    badge_html, boton_excel, semaforo_texto, semaforo_style_cell,
+)
 from utils.ai import generar_analisis_eerr
 from utils.pdf_report import generar_pdf_eerr
 
@@ -265,6 +268,149 @@ with tab_pl:
                 <div style="font-size:10px; color:#aaa;">Obj: {p_val:.1f}%</div>
             </div>
             """, unsafe_allow_html=True)
+
+    # ── DRILL-DOWN POR LÍNEA P&L ──────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("##### 🔍 Drill-down por Línea del P&L")
+    st.caption("Selecciona una línea para ver el desglose de cuentas contables que la componen.")
+
+    # Mapping línea P&L → clasificacion en BD
+    _LINEAS_DRILL = {
+        "— Selecciona una línea —": None,
+        "Ventas":                    "INGRESO",
+        "Costo de Venta":            "COSTO_VAR",
+        "Costo Fijo":                "COSTO_FIJO",
+        "OPEX":                      "OPEX",
+        "Gastos Financieros":        "FINANCIERO",
+        "Gastos No Operacionales":   "NO_OPERACIONAL",
+    }
+    _NOMBRES_CC = {
+        "CC-01": "Administración", "CC-02": "Comercial",
+        "CC-03": "Distribución",   "CC-04": "Producción",
+    }
+
+    linea_sel = st.selectbox(
+        "Línea",
+        list(_LINEAS_DRILL.keys()),
+        label_visibility="collapsed",
+        key="eerr_drill_linea",
+    )
+    clasif_drill = _LINEAS_DRILL[linea_sel]
+
+    if clasif_drill:
+        df_drill = query(f"""
+            SELECT
+                dc.nombre_cuenta,
+                vw.codigo_cc,
+                SUM(vw.valor_real) AS real,
+                SUM(vw.valor_ppto) AS ppto
+            FROM marts.vw_real_vs_ppto vw
+            JOIN master.dim_cuentas dc ON dc.codigo_cuenta = vw.codigo_cuenta
+            WHERE vw.periodo BETWEEN :desde AND :hasta
+              AND vw.clasificacion = :clasif
+              {filtro_soc}
+            GROUP BY dc.nombre_cuenta, vw.codigo_cc
+            ORDER BY SUM(vw.valor_real) DESC
+        """, {"desde": periodo_desde, "hasta": periodo_hasta, "clasif": clasif_drill})
+
+        if df_drill.empty:
+            st.info("Sin detalle de cuentas para esta línea en el período seleccionado.")
+        else:
+            df_drill["variacion"] = df_drill["real"] - df_drill["ppto"]
+            df_drill["pct"]       = (df_drill["real"] / df_drill["ppto"] * 100).round(1).fillna(0)
+            df_drill["estado"]    = df_drill["pct"].apply(semaforo_texto)
+            df_drill["cc_nombre"] = df_drill["codigo_cc"].map(_NOMBRES_CC).fillna(df_drill["codigo_cc"])
+
+            col_drill_tbl, col_drill_chart = st.columns([3, 2])
+
+            with col_drill_tbl:
+                # totales
+                tot_r = df_drill["real"].sum()
+                tot_p = df_drill["ppto"].sum()
+                tot_pct = round(tot_r / tot_p * 100, 1) if tot_p else 0
+                total_dr = pd.DataFrame([{
+                    "nombre_cuenta": "TOTAL", "cc_nombre": "",
+                    "real": tot_r, "ppto": tot_p,
+                    "variacion": tot_r - tot_p,
+                    "pct": tot_pct, "estado": semaforo_texto(tot_pct),
+                }])
+                df_drill_show = pd.concat(
+                    [df_drill[["nombre_cuenta","cc_nombre","real","ppto","variacion","pct","estado"]], total_dr],
+                    ignore_index=True,
+                ).rename(columns={
+                    "nombre_cuenta": "Cuenta Contable", "cc_nombre": "CC",
+                    "real": "Real", "ppto": "Presupuesto",
+                    "variacion": "Varianza", "pct": "% Ejec.", "estado": "Estado",
+                })
+
+                def _dv(val):
+                    if not isinstance(val, (int, float)): return ""
+                    return "color:#0F6E56;font-weight:500" if val <= 0 else "color:#cc0000;font-weight:500"
+                def _dp(val):
+                    if not isinstance(val, (int, float)): return ""
+                    return semaforo_style_cell(val)
+                def _dtot(row):
+                    if row["Cuenta Contable"] == "TOTAL":
+                        return ["font-weight:bold;background:#fdf5fb"] * len(row)
+                    return [""] * len(row)
+
+                st.dataframe(
+                    df_drill_show.style
+                        .format({
+                            "Real":        lambda v: fmt_mill(v),
+                            "Presupuesto": lambda v: fmt_mill(v),
+                            "Varianza":    lambda v: fmt_mill(v),
+                            "% Ejec.":     lambda v: f"{v:.1f}%" if isinstance(v, float) else v,
+                        })
+                        .apply(_dtot, axis=1)
+                        .map(_dv,  subset=["Varianza"])
+                        .map(_dp,  subset=["% Ejec."]),
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(40 + 35 * len(df_drill_show), 450),
+                    column_config={"Estado": st.column_config.TextColumn("Estado", width="small")},
+                )
+
+            with col_drill_chart:
+                # Top 8 cuentas por monto real
+                df_top = df_drill.nlargest(8, "real").copy()
+                df_top["label"] = df_top.apply(
+                    lambda r: f"{r['nombre_cuenta'][:22]}<br>({r['cc_nombre']})", axis=1
+                )
+                colores_bar = ["#cc0000" if p > 100 else ("#d97706" if p >= 90 else "#c4007a")
+                               for p in df_top["pct"]]
+                fig_drill = go.Figure()
+                fig_drill.add_trace(go.Bar(
+                    y=df_top["label"],
+                    x=df_top["real"] / 1_000_000,
+                    orientation="h",
+                    marker_color=colores_bar,
+                    opacity=0.88,
+                    text=(df_top["real"] / 1_000_000).apply(lambda v: f"${v:.2f}M"),
+                    textposition="outside",
+                    textfont={"size": 10},
+                ))
+                fig_drill.add_trace(go.Scatter(
+                    y=df_top["label"],
+                    x=df_top["ppto"] / 1_000_000,
+                    mode="markers",
+                    name="Ppto",
+                    marker=dict(symbol="line-ns", size=14, color="#2d0050",
+                                line=dict(width=2, color="#2d0050")),
+                ))
+                fig_drill.update_layout(
+                    height=max(250, 40 + 38 * len(df_top)),
+                    margin=dict(t=10, b=10, l=10, r=70),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(tickprefix="$", ticksuffix="M",
+                               gridcolor="#f5eef8", zeroline=False),
+                    yaxis=dict(gridcolor="#f5eef8", autorange="reversed"),
+                    showlegend=False,
+                    font=dict(family="Inter, Arial, sans-serif", size=10, color="#555"),
+                )
+                st.plotly_chart(fig_drill, use_container_width=True)
 
 # ╔══════════════════════════════════════════╗
 # ║  TAB 2 — PUENTE DE VARIANZAS             ║
