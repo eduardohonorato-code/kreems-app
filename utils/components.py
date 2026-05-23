@@ -149,23 +149,34 @@ def inject_font():
         }
 
         /* ── Botón colapsar/expandir sidebar (ambos estados) ── */
-        /* Ocultar el texto del ícono Material en TODOS los botones de header */
+
+        /* Ocultar texto Material Icons en CUALQUIER botón de la zona header/sidebar */
         [data-testid="stSidebarCollapseButton"] span,
         [data-testid="stSidebarCollapsedControl"] span,
         [data-testid="collapsedControl"] span,
-        [data-testid="stSidebarCollapsedControl"] button span,
-        header [data-testid*="sidebar"] button span,
-        header [data-testid*="Sidebar"] button span {
+        [data-testid="stHeader"] button span,
+        [data-testid="stToolbar"] button span,
+        header button span {
             font-size: 0 !important;
             opacity: 0 !important;
             position: absolute !important;
             pointer-events: none !important;
         }
-        /* Reemplazar con ☰ en el botón dentro del sidebar */
-        [data-testid="stSidebarCollapseButton"] {
-            width: 2rem !important; height: 2rem !important;
-            overflow: hidden !important; position: relative !important;
+
+        /* Estilo base compartido para ambos botones */
+        [data-testid="stSidebarCollapseButton"],
+        [data-testid="stSidebarCollapsedControl"],
+        [data-testid="collapsedControl"],
+        [data-testid="stHeader"] button,
+        header button {
+            width: 2rem !important;
+            height: 2rem !important;
+            overflow: hidden !important;
+            position: relative !important;
+            border-radius: 6px !important;
         }
+
+        /* Ícono ☰ para el botón dentro del sidebar (colapsar) */
         [data-testid="stSidebarCollapseButton"]::before {
             content: "☰";
             font-size: 16px !important;
@@ -177,10 +188,24 @@ def inject_font():
         }
         [data-testid="stSidebarCollapseButton"]:hover::before { color: #FFFFFF !important; }
 
-        /* Botón expandir (sidebar colapsado) — ocultar completamente */
-        [data-testid="stSidebarCollapsedControl"],
-        [data-testid="collapsedControl"] {
-            display: none !important;
+        /* Ícono ☰ para el botón fuera del sidebar (expandir) */
+        [data-testid="stSidebarCollapsedControl"]::before,
+        [data-testid="collapsedControl"]::before,
+        [data-testid="stHeader"] button:first-child::before,
+        header button:first-child::before {
+            content: "☰";
+            font-size: 16px !important;
+            font-family: Arial, sans-serif !important;
+            color: #2d0050 !important;
+            position: absolute !important;
+            top: 50% !important; left: 50% !important;
+            transform: translate(-50%, -50%) !important;
+        }
+        [data-testid="stSidebarCollapsedControl"]:hover::before,
+        [data-testid="collapsedControl"]:hover::before,
+        [data-testid="stHeader"] button:first-child:hover::before,
+        header button:first-child:hover::before {
+            color: #c4007a !important;
         }
     </style>
     """, unsafe_allow_html=True)
