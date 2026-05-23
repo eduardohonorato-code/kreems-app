@@ -6,7 +6,10 @@ import pandas as pd
 import json
 from utils.auth import login
 from utils.db import query
-from utils.components import header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill, boton_excel
+from utils.components import (
+    header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill, boton_excel,
+    semaforo_texto, semaforo_style_cell,
+)
 from utils.ai import generar_analisis_cuentas
 from utils.notas import guardar_nota, obtener_notas, eliminar_nota
 
@@ -100,8 +103,8 @@ real_total   = df_agg["real"].sum()
 ppto_total   = df_agg["ppto"].sum()
 pct_prom     = (real_total / ppto_total * 100) if ppto_total else 0
 
-# Alertas: pct >= 85 y no es INGRESO
-df_alertas   = df_agg[df_agg["pct"].apply(lambda x: x != float("inf") and x >= 85)]
+# Alertas: pct >= 90% (umbral semáforo amarillo)
+df_alertas   = df_agg[df_agg["pct"].apply(lambda x: x != float("inf") and x >= 90)]
 n_alertas    = len(df_alertas)
 color_alerta = COLOR_GOOD if n_alertas == 0 else (COLOR_WARN if n_alertas <= 3 else COLOR_BAD)
 color_prom   = COLOR_GOOD if pct_prom <= 100 else COLOR_BAD
@@ -138,7 +141,7 @@ with k4:
     st.markdown(f"""
     <div style="background:#fff;border:1px solid #f0dff0;border-radius:12px;
                 padding:14px 18px;text-align:center;">
-        <div style="font-size:11px;color:#999;margin-bottom:4px;">Cuentas con alerta ≥85%</div>
+        <div style="font-size:11px;color:#999;margin-bottom:4px;">Cuentas con alerta ≥90%</div>
         <div style="font-size:26px;font-weight:700;color:{color_alerta};">{icono} {n_alertas}</div>
     </div>""", unsafe_allow_html=True)
 
@@ -152,16 +155,21 @@ _placeholder_exp_ct = col_exp_ct.empty()
 
 t_real = df_agg["real"].sum()
 t_ppto = df_agg["ppto"].sum()
+t_pct  = round(t_real / t_ppto * 100, 1) if t_ppto else 0
+df_agg["estado"] = df_agg["pct"].apply(
+    lambda x: semaforo_texto(x) if x != float("inf") else "⚪ S/D"
+)
 total_det = pd.DataFrame([{
     "nombre_cuenta": "TOTAL", "clasificacion": "",
     "real": t_real, "ppto": t_ppto,
     "variacion": t_real - t_ppto,
-    "pct": round(t_real / t_ppto * 100, 1) if t_ppto else 0
+    "pct": t_pct, "estado": semaforo_texto(t_pct),
 }])
 df_show = pd.concat([df_agg, total_det], ignore_index=True)
-df_display = df_show[["nombre_cuenta", "clasificacion", "real", "ppto", "variacion", "pct"]].rename(columns={
+df_display = df_show[["nombre_cuenta","clasificacion","real","ppto","variacion","pct","estado"]].rename(columns={
     "nombre_cuenta": "Cuenta Contable", "clasificacion": "Clasificación",
-    "real": "Real", "ppto": "Presupuesto", "variacion": "Varianza", "pct": "% Ejec."
+    "real": "Real", "ppto": "Presupuesto", "variacion": "Varianza",
+    "pct": "% Ejec.", "estado": "Estado",
 })
 
 def _color_ctx(row):
@@ -175,9 +183,7 @@ def _color_ctx(row):
 
 def _color_pct(val):
     if not isinstance(val, (int, float)) or val == float("inf"): return "color:#888"
-    if val >= 100: return f"color:{COLOR_BAD};font-weight:600"
-    if val >= 85:  return f"color:{COLOR_WARN};font-weight:600"
-    return f"color:{COLOR_GOOD}"
+    return semaforo_style_cell(val)
 
 def _total_row(row):
     if row["Cuenta Contable"] == "TOTAL":
@@ -198,7 +204,8 @@ st.dataframe(
         .map(_color_pct, subset=["% Ejec."]),
     use_container_width=True,
     hide_index=True,
-    height=520
+    height=520,
+    column_config={"Estado": st.column_config.TextColumn("Estado", width="small")},
 )
 st.caption(f"{n_cuentas} cuenta{'s' if n_cuentas != 1 else ''} mostrada{'s' if n_cuentas != 1 else ''}")
 

@@ -495,6 +495,42 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
     return sociedad_sel, cc_sel
 
 
+# ── SEMÁFORO PRESUPUESTARIO ───────────────────────────────────
+# Umbrales para CC y cuentas de gasto (menos ejecución = mejor)
+_SEM_ROJO    = 100.0   # > 100% → sobre presupuesto
+_SEM_AMARILLO = 90.0   # 90–100% → zona de alerta
+
+def semaforo_texto(pct: float) -> str:
+    """Retorna emoji + etiqueta para columna Estado en tablas."""
+    if pct > _SEM_ROJO:
+        return "🔴 Alerta"
+    if pct >= _SEM_AMARILLO:
+        return "🟡 Atención"
+    return "🟢 OK"
+
+def semaforo_badge(pct: float) -> str:
+    """Badge HTML con semáforo de ejecución. Ideal para secciones HTML."""
+    if pct > _SEM_ROJO:
+        bg, color, txt = "rgba(204,0,0,0.10)", "#cc0000", "🔴 Alerta"
+    elif pct >= _SEM_AMARILLO:
+        bg, color, txt = "rgba(217,119,6,0.11)", "#d97706", "🟡 Atención"
+    else:
+        bg, color, txt = "rgba(15,110,86,0.10)", "#0F6E56", "🟢 OK"
+    return (
+        f"<span style='background:{bg}; color:{color}; border-radius:20px; "
+        f"padding:2px 9px; font-size:11px; font-weight:700; white-space:nowrap;'>"
+        f"{txt}</span>"
+    )
+
+def semaforo_style_cell(pct: float) -> str:
+    """CSS inline para colorear celdas de % ejecución en Pandas Styler."""
+    if pct > _SEM_ROJO:
+        return "color:#cc0000; font-weight:700"
+    if pct >= _SEM_AMARILLO:
+        return "color:#d97706; font-weight:600"
+    return "color:#0F6E56; font-weight:500"
+
+
 # ── HELPERS VISUALES ──────────────────────────────────────────
 
 def badge_html(texto: str, tipo: str = "normal") -> str:
@@ -532,30 +568,51 @@ def progress_bar_html(pct: float, max_pct: float = 150) -> str:
 
 
 def cc_card(nombre: str, codigo: str, real: float, ppto: float) -> str:
-    """Card HTML para un Centro de Costo."""
+    """Card HTML para un Centro de Costo con semáforo de 3 estados."""
     pct       = (real / ppto * 100) if ppto else 0
     variacion = real - ppto
-    is_over   = pct > 100
 
     COLOR_GOOD = "#0F6E56"
+    COLOR_WARN = "#d97706"
     COLOR_BAD  = "#cc0000"
 
-    color_pct  = COLOR_BAD if is_over else COLOR_GOOD
-    color_var  = COLOR_BAD if variacion > 0 else COLOR_GOOD
-    icono_var  = "&#9650;" if variacion > 0 else "&#9660;"   # ▲ ▼ como entidades HTML
-    bar_fill   = min(pct, 100)
-    bar_color  = COLOR_BAD if is_over else "#c4007a"
-    border_col = "#ffd0d0" if is_over else "#f0dff0"
-    badge_bg   = "rgba(204,0,0,0.10)" if is_over else "rgba(15,110,86,0.10)"
-    badge_pre  = "&#9650; " if is_over else ""
-    over_note  = (
-        f"<div style='font-size:10px; color:{COLOR_BAD}; margin-bottom:6px; font-weight:600;'>"
-        f"Sobre presupuesto en {pct-100:.1f}%</div>"
-    ) if is_over else "<div style='margin-bottom:12px;'></div>"
+    # ── semáforo 3 estados ──
+    if pct > _SEM_ROJO:
+        color_pct  = COLOR_BAD
+        badge_bg   = "rgba(204,0,0,0.10)"
+        bar_color  = COLOR_BAD
+        border_col = "#ffd0d0"
+        sem_label  = "🔴 Alerta"
+        status_note = (
+            f"<div style='font-size:10px; color:{COLOR_BAD}; margin-bottom:6px; font-weight:600;'>"
+            f"Sobre presupuesto en {pct-100:.1f}%</div>"
+        )
+    elif pct >= _SEM_AMARILLO:
+        color_pct  = COLOR_WARN
+        badge_bg   = "rgba(217,119,6,0.11)"
+        bar_color  = COLOR_WARN
+        border_col = "#ffe9c5"
+        sem_label  = "🟡 Atención"
+        status_note = (
+            f"<div style='font-size:10px; color:{COLOR_WARN}; margin-bottom:6px; font-weight:600;'>"
+            f"Zona de alerta — {pct:.1f}% ejecutado</div>"
+        )
+    else:
+        color_pct  = COLOR_GOOD
+        badge_bg   = "rgba(15,110,86,0.10)"
+        bar_color  = "#c4007a"
+        border_col = "#f0dff0"
+        sem_label  = "🟢 OK"
+        status_note = "<div style='margin-bottom:12px;'></div>"
+
+    color_var = COLOR_BAD if variacion > 0 else COLOR_GOOD
+    icono_var = "&#9650;" if variacion > 0 else "&#9660;"
+    bar_fill  = min(pct, 100)
 
     return (
         f"<div style='background:#fff; border:1px solid {border_col}; border-radius:14px;"
         f"padding:18px 20px;'>"
+        # fila título + badges
         f"<div style='display:flex; justify-content:space-between; align-items:flex-start;"
         f"margin-bottom:10px;'>"
         f"<div>"
@@ -563,13 +620,18 @@ def cc_card(nombre: str, codigo: str, real: float, ppto: float) -> str:
         f"letter-spacing:0.5px;'>{codigo}</div>"
         f"<div style='font-size:15px; font-weight:700; color:#2d0050; margin-top:2px;'>{nombre}</div>"
         f"</div>"
+        f"<div style='display:flex; flex-direction:column; align-items:flex-end; gap:4px;'>"
         f"<span style='background:{badge_bg}; color:{color_pct}; border-radius:20px;"
-        f"padding:3px 10px; font-size:12px; font-weight:700;'>{badge_pre}{pct:.1f}%</span>"
+        f"padding:2px 9px; font-size:12px; font-weight:700;'>{pct:.1f}%</span>"
+        f"<span style='font-size:11px; font-weight:700;'>{sem_label}</span>"
         f"</div>"
-        f"<div style='background:#f0f0f0; border-radius:6px; height:8px; margin-bottom:6px;'>"
-        f"<div style='background:{bar_color}; width:{bar_fill:.1f}%; height:8px; border-radius:6px;'>"
+        f"</div>"
+        # barra de progreso
+        f"<div style='background:#f0f0f0; border-radius:6px; height:7px; margin-bottom:6px;'>"
+        f"<div style='background:{bar_color}; width:{bar_fill:.1f}%; height:7px; border-radius:6px;'>"
         f"</div></div>"
-        f"{over_note}"
+        f"{status_note}"
+        # montos
         f"<div style='display:flex; justify-content:space-between;'>"
         f"<div><div style='font-size:10px; color:#bbb;'>Ejecutado</div>"
         f"<div style='font-size:14px; font-weight:700; color:#2d0050;'>${real/1_000_000:,.2f}M</div></div>"

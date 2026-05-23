@@ -7,7 +7,10 @@ import json
 import plotly.graph_objects as go
 from utils.auth import login
 from utils.db import query
-from utils.components import header, selector_meses, sidebar_kreems, fmt_mill, cc_card, boton_excel
+from utils.components import (
+    header, selector_meses, sidebar_kreems, fmt_mill, cc_card, boton_excel,
+    semaforo_texto, semaforo_style_cell,
+)
 from utils.ai import generar_analisis_cc
 from utils.notas import guardar_nota, obtener_notas, eliminar_nota
 
@@ -105,21 +108,26 @@ with col_res:
     df_r["variacion"] = df_r["real"] - df_r["ppto"]
     df_r["pct"]       = (df_r["real"] / df_r["ppto"] * 100).round(1).fillna(0)
     df_r["nombre"]    = df_r["codigo_cc"].map(NOMBRES_CC).fillna(df_r["nombre_cc"])
+    df_r["estado"]    = df_r["pct"].apply(semaforo_texto)
+    total_pct = round(df_r["real"].sum() / df_r["ppto"].sum() * 100, 1) if df_r["ppto"].sum() else 0
     total = pd.DataFrame([{
         "nombre": "TOTAL", "real": df_r["real"].sum(), "ppto": df_r["ppto"].sum(),
         "variacion": df_r["real"].sum() - df_r["ppto"].sum(),
-        "pct": round(df_r["real"].sum() / df_r["ppto"].sum() * 100, 1) if df_r["ppto"].sum() else 0
+        "pct": total_pct, "estado": semaforo_texto(total_pct),
     }])
 
-    df_show = pd.concat([df_r[["nombre","real","ppto","variacion","pct"]], total], ignore_index=True)
-    df_show = df_show.rename(columns={"nombre":"CC","real":"Real","ppto":"Presupuesto","variacion":"Varianza","pct":"% Ejec."})
+    df_show = pd.concat([df_r[["nombre","real","ppto","variacion","pct","estado"]], total], ignore_index=True)
+    df_show = df_show.rename(columns={
+        "nombre":"CC","real":"Real","ppto":"Presupuesto",
+        "variacion":"Varianza","pct":"% Ejec.","estado":"Estado",
+    })
 
     def _cv(val):
         if not isinstance(val, (int, float)): return ""
         return f"color:{COLOR_GOOD};font-weight:500" if val <= 0 else f"color:{COLOR_BAD};font-weight:500"
     def _cp(val):
         if not isinstance(val, (int, float)): return ""
-        return f"color:{COLOR_GOOD}" if val <= 100 else f"color:{COLOR_BAD};font-weight:600"
+        return semaforo_style_cell(val)
     def _tot(row):
         if row["CC"] == "TOTAL": return ["font-weight:bold;background:#fdf5fb"]*len(row)
         return [""]*len(row)
@@ -129,7 +137,8 @@ with col_res:
                  "Varianza": lambda v: fmt_mill(v),
                  "% Ejec.": lambda v: f"{v:.1f}%" if isinstance(v, float) else v})
         .apply(_tot, axis=1).map(_cv, subset=["Varianza"]).map(_cp, subset=["% Ejec."]),
-        use_container_width=True, hide_index=True, height=255)
+        use_container_width=True, hide_index=True, height=255,
+        column_config={"Estado": st.column_config.TextColumn("Estado", width="small")})
 
     with col_exp_res:
         boton_excel(

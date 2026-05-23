@@ -8,7 +8,8 @@ from datetime import date
 from utils.auth import login
 from utils.db import query
 from utils.components import (
-    header, selector_meses, kpi_card, sidebar_kreems, fmt_mill, badge_html, boton_excel
+    header, selector_meses, kpi_card, sidebar_kreems,
+    fmt_mill, badge_html, boton_excel, semaforo_texto, semaforo_style_cell
 )
 
 _ANO = date.today().year
@@ -287,15 +288,18 @@ if not df_cc.empty:
     df_tabla = df_cc[["nombre_cc", "real", "ppto"]].copy()
     df_tabla["variacion"] = df_tabla["real"] - df_tabla["ppto"]
     df_tabla["pct"]       = (df_tabla["real"] / df_tabla["ppto"] * 100).round(1)
+    df_tabla["estado"]    = df_tabla["pct"].apply(semaforo_texto)
 
     total_real = df_tabla["real"].sum()
     total_ppto = df_tabla["ppto"].sum()
+    total_pct  = round(total_real / total_ppto * 100, 1) if total_ppto else 0
     total = pd.DataFrame([{
         "nombre_cc": "TOTAL",
         "real":      total_real,
         "ppto":      total_ppto,
         "variacion": total_real - total_ppto,
-        "pct":       round(total_real / total_ppto * 100, 1) if total_ppto else 0
+        "pct":       total_pct,
+        "estado":    semaforo_texto(total_pct),
     }])
 
     df_tabla = pd.concat([df_tabla, total], ignore_index=True)
@@ -305,15 +309,19 @@ if not df_cc.empty:
         "real":      "Real",
         "ppto":      "Presupuesto",
         "variacion": "Variación",
-        "pct":       "% Ejec."
+        "pct":       "% Ejec.",
+        "estado":    "Estado",
     })
 
-    def color_variacion(val):
-        if isinstance(val, str):
-            return ""
+    def _color_var(val):
+        if isinstance(val, str): return ""
         return "color:#0F6E56; font-weight:500" if val <= 0 else "color:#cc0000; font-weight:500"
 
-    def resaltar_total(row):
+    def _color_pct(val):
+        if isinstance(val, str): return ""
+        return semaforo_style_cell(val)
+
+    def _resaltar_total(row):
         if row["Centro de Costo"] == "TOTAL":
             return ["font-weight:bold; background:#fdf5fb"] * len(row)
         return [""] * len(row)
@@ -324,13 +332,15 @@ if not df_cc.empty:
                 "Real":        lambda v: fmt_mill(v),
                 "Presupuesto": lambda v: fmt_mill(v),
                 "Variación":   lambda v: fmt_mill(v),
-                "% Ejec.":     lambda v: f"{v:.1f}%"
+                "% Ejec.":     lambda v: f"{v:.1f}%" if isinstance(v, float) else v,
             })
-            .apply(resaltar_total, axis=1)
-            .map(color_variacion, subset=["Variación"]),
+            .apply(_resaltar_total, axis=1)
+            .map(_color_var, subset=["Variación"])
+            .map(_color_pct, subset=["% Ejec."]),
         use_container_width=True,
         hide_index=True,
-        height=220
+        height=220,
+        column_config={"Estado": st.column_config.TextColumn("Estado", width="small")},
     )
 else:
     st.info("Sin datos para el periodo seleccionado.")
