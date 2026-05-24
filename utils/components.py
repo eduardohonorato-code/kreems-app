@@ -437,6 +437,8 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
         st.page_link("pages/4_control_cuentas.py",   label="📑  Control Cuentas Contables",  use_container_width=True)
         st.page_link("pages/6_reportes.py",          label="🤖  Reportes Guardados",         use_container_width=True)
         st.page_link("pages/8_proyeccion_cierre.py", label="📈  Proyección al Cierre",       use_container_width=True)
+        st.page_link("pages/10_riesgos.py",          label="⚠️  Riesgos y Oportunidades",   use_container_width=True)
+        st.page_link("pages/11_flash_report.py",     label="📄  Flash Report Mensual",       use_container_width=True)
 
         rol = st.session_state.get("rol", "")
         if rol == "admin":

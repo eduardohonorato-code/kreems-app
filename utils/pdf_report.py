@@ -343,3 +343,306 @@ def generar_pdf_eerr(datos: dict, analisis_texto: str = "", fig_bridge=None) -> 
 
     # ── Output ─────────────────────────────────────────────────
     return bytes(pdf.output())
+
+
+# ═══════════════════════════════════════════════════════════════
+# Flash Report Mensual — 1 página ejecutiva
+# ═══════════════════════════════════════════════════════════════
+
+def generar_flash_report(
+    datos: dict,
+    df_top,
+    analisis_texto: str = "",
+    titulo_mes: str = "",
+) -> bytes:
+    """
+    Genera PDF del Flash Report Mensual (1 página A4).
+
+    datos: ventas_r/p, cv_r/p, cf_r/p, opex_r/p, fin_r/p, nooper_r/p,
+           ub_r/p, ebit_r/p, un_r/p, gastos_r/p, periodo, sociedad
+    df_top: DataFrame columnas cuenta, real, ppto, varianza
+    """
+    from fpdf import FPDF
+    import pandas as _pd
+
+    v_r = datos["ventas_r"]; v_p = datos["ventas_p"]
+    e_r = datos["ebit_r"];   e_p = datos["ebit_p"]
+    u_r = datos["un_r"];     u_p = datos["un_p"]
+    g_r = datos["gastos_r"]; g_p = datos["gastos_p"]
+    ub_r= datos["ub_r"];     ub_p= datos["ub_p"]
+    sociedad = datos.get("sociedad", "Consolidado")
+    periodo  = datos.get("periodo", "")
+    titulo   = titulo_mes or periodo
+
+    pct_v = v_r / v_p * 100 if v_p else 0
+    pct_e = e_r / e_p * 100 if e_p else 0
+    pct_u = u_r / u_p * 100 if u_p else 0
+    pct_g = g_r / g_p * 100 if g_p else 0
+
+    # Fuentes
+    FONT_PATHS = [
+        ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"),
+        ("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"),
+    ]
+    FONT_NAME = "Helvetica"
+
+    def _safe(txt: str) -> str:
+        return (txt.replace("—", "-").replace("–", "-")
+                   .replace("▲", "+").replace("▼", "-")
+                   .encode("latin-1", errors="replace").decode("latin-1"))
+
+    class FlashPDF(FPDF):
+        def header(self): pass
+        def footer(self):
+            self.set_y(-10)
+            self.set_font(FONT_NAME, "I", 6.5)
+            self.set_text_color(*C_GRAY)
+            self.cell(0, 4, f"Kreems FP&A  —  Flash Report {titulo}  —  {_date.today().strftime('%d/%m/%Y')}", align="C")
+
+    pdf = FlashPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=False)
+
+    _unicode_ok = False
+    for reg, bold in FONT_PATHS:
+        try:
+            import os
+            if os.path.exists(reg) and os.path.exists(bold):
+                pdf.add_font("FF", "",  reg)
+                pdf.add_font("FF", "B", bold)
+                pdf.add_font("FF", "I", reg)
+                FONT_NAME = "FF"
+                _unicode_ok = True
+                break
+        except Exception:
+            pass
+
+    def T(txt: str) -> str:
+        return txt if _unicode_ok else _safe(txt)
+
+    pdf.add_page()
+    pdf.set_margins(0, 0, 0)
+
+    # ── CABECERA PURPLE ──────────────────────────────────────────
+    pdf.set_fill_color(*C_PURPLE)
+    pdf.rect(0, 0, 210, 22, style="F")
+    pdf.set_y(4)
+    pdf.set_font(FONT_NAME, "B", 13)
+    pdf.set_text_color(*C_WHITE)
+    pdf.cell(0, 6, T("KREEMS FP&A"), ln=True, align="C")
+    pdf.set_font(FONT_NAME, "", 8)
+    pdf.cell(0, 5, T(f"Flash Report Mensual  |  {titulo}  |  {sociedad}"), ln=True, align="C")
+    pdf.set_font(FONT_NAME, "", 7)
+    pdf.set_text_color(220, 180, 255)
+    pdf.cell(0, 4, T(f"Generado: {_date.today().strftime('%d/%m/%Y')}"), ln=True, align="C")
+
+    # ── KPI CARDS ────────────────────────────────────────────────
+    kpis = [
+        ("VENTAS",     v_r, v_p, pct_v, False),
+        ("EBIT",       e_r, e_p, pct_e, False),
+        ("UT. NETA",   u_r, u_p, pct_u, False),
+        ("GASTOS TOT", g_r, g_p, pct_g, True),
+    ]
+    card_w = 49; card_h = 26; x0 = 7; y0 = 24
+
+    for i, (lbl, r, p, pct, inv) in enumerate(kpis):
+        x = x0 + i * (card_w + 2)
+        # color semáforo
+        if not inv:
+            cvar = C_GREEN if pct >= 100 else (C_RED if pct < 90 else (181, 69, 9))
+        else:
+            cvar = C_GREEN if pct <= 90 else (C_RED if pct > 100 else (181, 69, 9))
+
+        pdf.set_draw_color(*C_BORDER)
+        pdf.set_fill_color(*C_WHITE)
+        pdf.rect(x, y0, card_w, card_h, style="FD")
+
+        # Barra color superior
+        pdf.set_fill_color(*cvar)
+        pdf.rect(x, y0, card_w, 2, style="F")
+
+        pdf.set_xy(x, y0 + 3)
+        pdf.set_font(FONT_NAME, "", 6.5)
+        pdf.set_text_color(*C_GRAY)
+        pdf.cell(card_w, 3.5, T(lbl), align="C")
+
+        pdf.set_xy(x, y0 + 7)
+        pdf.set_font(FONT_NAME, "B", 10.5)
+        pdf.set_text_color(*C_PURPLE)
+        pdf.cell(card_w, 5.5, T(_fmt_m(r)), align="C")
+
+        pdf.set_xy(x, y0 + 13)
+        pdf.set_font(FONT_NAME, "B", 8)
+        pdf.set_text_color(*cvar)
+        pdf.cell(card_w, 4, T(f"{pct:.1f}% ppto"), align="C")
+
+        pdf.set_xy(x, y0 + 18)
+        pdf.set_font(FONT_NAME, "", 6.5)
+        pdf.set_text_color(*C_GRAY)
+        pdf.cell(card_w, 3.5, T(f"Obj: {_fmt_m(p)}"), align="C")
+
+    # ── SEMÁFORO GLOBAL ──────────────────────────────────────────
+    y_sem = y0 + card_h + 3
+    sem_color = C_GREEN if pct_v >= 100 else (C_RED if pct_v < 90 else (181, 69, 9))
+    sem_label = "OK" if pct_v >= 100 else ("Alerta" if pct_v < 90 else "Atencion")
+    estado_txt = f"ESTADO GENERAL: {sem_label}  |  Ejecucion ventas {pct_v:.1f}%  |  EBIT {pct_e:.1f}%  |  Ut.Neta {pct_u:.1f}%"
+
+    pdf.set_fill_color(248, 249, 251)
+    pdf.rect(0, y_sem, 210, 10, style="F")
+    pdf.set_draw_color(*C_BORDER)
+    pdf.line(0, y_sem, 210, y_sem)
+    pdf.line(0, y_sem + 10, 210, y_sem + 10)
+
+    pdf.set_fill_color(*sem_color)
+    pdf.rect(7, y_sem + 2.5, 5, 5, style="F")
+    pdf.set_xy(14, y_sem + 1.5)
+    pdf.set_font(FONT_NAME, "B", 8)
+    pdf.set_text_color(*sem_color)
+    pdf.cell(40, 5, T(sem_label.upper()), ln=False)
+    pdf.set_font(FONT_NAME, "", 7.5)
+    pdf.set_text_color(*C_GRAY)
+    pdf.cell(0, 5, T(f"Ejecucion ventas {pct_v:.1f}%  |  EBIT {pct_e:.1f}%  |  Ut.Neta {pct_u:.1f}%  |  Gastos {pct_g:.1f}%"), ln=True)
+
+    # ── SECCIÓN: 2 COLUMNAS ──────────────────────────────────────
+    y_body   = y_sem + 12
+    col_mid  = 7 + 95   # separador en x=102
+
+    def _section_hdr(x, y, txt, w):
+        pdf.set_fill_color(*C_PURPLE)
+        pdf.rect(x, y, w, 6, style="F")
+        pdf.set_xy(x + 2, y + 0.5)
+        pdf.set_font(FONT_NAME, "B", 7)
+        pdf.set_text_color(*C_WHITE)
+        pdf.cell(w - 4, 5, T(txt), ln=False)
+
+    # ── LEFT: Top Desviaciones ───────────────────────────────────
+    _section_hdr(7, y_body, "TOP DESVIACIONES (COSTOS)", 93)
+    y_tbl = y_body + 7
+
+    # Header tabla
+    hdrs   = ["Cuenta", "Real", "Ppto", "Var $", "% Ejec."]
+    h_w    = [44, 14, 14, 14, 11]
+    pdf.set_fill_color(240, 240, 248)
+    pdf.set_draw_color(*C_BORDER)
+    for j, (h, w) in enumerate(zip(hdrs, h_w)):
+        align = "L" if j == 0 else "R"
+        pdf.set_xy(7 + sum(h_w[:j]), y_tbl)
+        pdf.set_font(FONT_NAME, "B", 6.5)
+        pdf.set_text_color(*C_GRAY)
+        pdf.cell(w, 5, T(h), fill=True, align=align)
+    y_tbl += 5
+
+    rows_shown = 0
+    for _, row in (df_top.head(7) if not df_top.empty else _pd.DataFrame()).iterrows():
+        if y_tbl + 5 > 240:
+            break
+        real_v = float(row["real"])
+        ppto_v = float(row["ppto"])
+        var_v  = float(row["varianza"])
+        pct_row = real_v / ppto_v * 100 if ppto_v else 0
+        cvar   = C_RED if var_v > 0 else C_GREEN
+        fill   = C_LIGHT if rows_shown % 2 == 0 else C_WHITE
+        cuenta_txt = str(row["cuenta"])[:28]
+
+        pdf.set_fill_color(*fill)
+        pdf.set_text_color(30, 30, 30)
+        pdf.set_font(FONT_NAME, "", 6.5)
+
+        vals = [cuenta_txt, _fmt_m(real_v), _fmt_m(ppto_v), "", f"{pct_row:.1f}%"]
+        for j, (val, w) in enumerate(zip(vals, h_w)):
+            pdf.set_xy(7 + sum(h_w[:j]), y_tbl)
+            if j == 3:
+                pdf.set_text_color(*cvar)
+                signo = "+" if var_v >= 0 else ""
+                pdf.cell(w, 4.5, T(f"{signo}{_fmt_m(var_v)}"), fill=True, align="R")
+                pdf.set_text_color(30, 30, 30)
+            else:
+                pdf.cell(w, 4.5, T(val), fill=True, align="L" if j == 0 else "R")
+
+        y_tbl   += 4.5
+        rows_shown += 1
+
+    # ── RIGHT: Ejecución P&L mini-barras ────────────────────────
+    _section_hdr(col_mid + 2, y_body, "EJECUCION P&L", 99)
+    y_bar = y_body + 9
+
+    lineas_pl = [
+        ("Ventas",       v_r,   v_p,   pct_v,  False),
+        ("Ut. Bruta",    ub_r,  ub_p,  (ub_r/ub_p*100) if ub_p else 0, False),
+        ("EBIT",         e_r,   e_p,   pct_e,  False),
+        ("Ut. Neta",     u_r,   u_p,   pct_u,  False),
+        ("Gastos Total", g_r,   g_p,   pct_g,  True),
+    ]
+    bar_area_w = 88
+    bar_h_px   = 4
+
+    for lbl, r, p, pct, inv in lineas_pl:
+        if y_bar + 12 > 245:
+            break
+        if not inv:
+            cbar = C_GREEN if pct >= 100 else (C_RED if pct < 90 else (181, 69, 9))
+        else:
+            cbar = C_GREEN if pct <= 90 else (C_RED if pct > 100 else (181, 69, 9))
+
+        # Label + porcentaje
+        pdf.set_xy(col_mid + 3, y_bar)
+        pdf.set_font(FONT_NAME, "", 7)
+        pdf.set_text_color(*C_PURPLE)
+        pdf.cell(45, 4, T(lbl))
+        pdf.set_xy(col_mid + 50, y_bar)
+        pdf.set_font(FONT_NAME, "B", 7)
+        pdf.set_text_color(*cbar)
+        pdf.cell(30, 4, T(f"{pct:.1f}%"), align="R")
+
+        # Barra de fondo (gris)
+        y_bar += 5
+        pdf.set_fill_color(*C_BORDER)
+        pdf.rect(col_mid + 3, y_bar, bar_area_w, bar_h_px, style="F")
+        # Barra de progreso
+        bar_fill = min(pct / 100.0, 1.5) * bar_area_w
+        pdf.set_fill_color(*cbar)
+        pdf.rect(col_mid + 3, y_bar, min(bar_fill, bar_area_w), bar_h_px, style="F")
+        # Valores Real / Ppto
+        y_bar += bar_h_px + 1
+        pdf.set_xy(col_mid + 3, y_bar)
+        pdf.set_font(FONT_NAME, "", 6)
+        pdf.set_text_color(*C_GRAY)
+        pdf.cell(bar_area_w, 3.5, T(f"Real {_fmt_m(r)}  /  Obj {_fmt_m(p)}"), align="L")
+        y_bar += 5
+
+    # Línea divisoria vertical
+    y_end_body = max(y_tbl, y_bar) + 2
+    pdf.set_draw_color(*C_BORDER)
+    pdf.line(col_mid + 1, y_body, col_mid + 1, y_end_body)
+
+    # ── ANÁLISIS IA ──────────────────────────────────────────────
+    y_ia_start = y_end_body + 3
+    page_limit = 284
+
+    if analisis_texto.strip() and y_ia_start < 260:
+        pdf.set_fill_color(*C_PURPLE)
+        pdf.rect(7, y_ia_start, 196, 6, style="F")
+        pdf.set_xy(9, y_ia_start + 0.5)
+        pdf.set_font(FONT_NAME, "B", 7)
+        pdf.set_text_color(*C_WHITE)
+        pdf.cell(190, 5, T("COMENTARIO EJECUTIVO (IA)"), ln=True)
+
+        y_txt = y_ia_start + 7
+        pdf.set_font(FONT_NAME, "", 7.5)
+        pdf.set_text_color(15, 15, 15)
+        line_h = 4.2
+        y_barra = y_txt
+        for line in T(analisis_texto).split("\n"):
+            if pdf.get_y() + line_h > page_limit:
+                break
+            pdf.set_xy(12, y_txt if pdf.get_y() < y_txt else pdf.get_y())
+            pdf.multi_cell(191, line_h, line, border=0)
+
+        h_ia = pdf.get_y() - y_barra
+        if h_ia > 0:
+            pdf.set_fill_color(*C_PURPLE)
+            pdf.rect(7, y_barra, 2.5, h_ia, style="F")
+
+    # ── OUTPUT ──────────────────────────────────────────────────
+    return bytes(pdf.output())

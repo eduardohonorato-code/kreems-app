@@ -55,6 +55,12 @@ cards = [
     ("📅", "Presupuesto Mensual",
      "Vista y edición del presupuesto distribuido mes a mes por CC y cuenta contable.",
      "pages/9_presupuesto_mensual.py"),
+    ("⚠️", "Riesgos y Oportunidades",
+     "Registro y heat map de riesgos presupuestarios con análisis de escenarios y seguimiento.",
+     "pages/10_riesgos.py"),
+    ("📄", "Flash Report Mensual",
+     "Resumen ejecutivo de 1 página con KPIs, semáforo, top desviaciones y comentario IA. Descargable en PDF.",
+     "pages/11_flash_report.py"),
 ]
 
 # Tarjeta de admin solo visible para admins
