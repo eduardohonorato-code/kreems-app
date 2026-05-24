@@ -380,7 +380,7 @@ with tab_nuevo:
         with col_m:
             monto_nuevo  = st.number_input(
                 "Monto estimado ($)", min_value=0.0, step=1_000_000.0,
-                format="%,.0f", help="Impacto económico estimado en pesos"
+                format="%.0f", help="Impacto económico estimado en pesos"
             )
 
         col_resp, col_vcto = st.columns(2)

@@ -60,43 +60,63 @@ with c3:
 
 
 # ── Queries ─────────────────────────────────────────────────────
-@st.cache_data(ttl=300, show_spinner=False)
 def _load_pl(p: str, soc: str) -> pd.DataFrame:
-    filtro = "AND sociedad = :soc" if soc != "Consolidado" else ""
-    params: dict = {"p": p}
+    """Sin @st.cache_data propio — query() ya está cacheada."""
     if soc != "Consolidado":
-        params["soc"] = soc
-    return query(f"""
-        SELECT clasificacion,
-               SUM(monto_real) AS real,
-               SUM(monto_ppto) AS ppto
-        FROM marts.vw_real_vs_ppto
-        WHERE periodo_ref = :p {filtro}
-        GROUP BY clasificacion
-    """, params)
+        return query(
+            """SELECT clasificacion,
+                      SUM(monto_real) AS real,
+                      SUM(monto_ppto) AS ppto
+               FROM marts.vw_real_vs_ppto
+               WHERE periodo_ref = :p AND sociedad = :soc
+               GROUP BY clasificacion""",
+            {"p": p, "soc": soc},
+        )
+    return query(
+        """SELECT clasificacion,
+                  SUM(monto_real) AS real,
+                  SUM(monto_ppto) AS ppto
+           FROM marts.vw_real_vs_ppto
+           WHERE periodo_ref = :p
+           GROUP BY clasificacion""",
+        {"p": p},
+    )
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def _load_top_desv(p: str, soc: str, n: int = 7) -> pd.DataFrame:
-    filtro = "AND v.sociedad = :soc" if soc != "Consolidado" else ""
-    params: dict = {"p": p, "n": n}
+    """Sin @st.cache_data propio — query() ya está cacheada."""
     if soc != "Consolidado":
-        params["soc"] = soc
-    return query(f"""
-        SELECT COALESCE(d.nombre_cuenta, v.cuenta_codigo) AS cuenta,
-               SUM(v.monto_real)  AS real,
-               SUM(v.monto_ppto)  AS ppto,
-               SUM(v.monto_real) - SUM(v.monto_ppto) AS varianza
-        FROM marts.vw_real_vs_ppto v
-        LEFT JOIN master.dim_cuentas d ON d.cuenta_codigo = v.cuenta_codigo
-        WHERE v.periodo_ref = :p
-          AND v.clasificacion NOT IN ('INGRESO')
-          {filtro}
-        GROUP BY COALESCE(d.nombre_cuenta, v.cuenta_codigo)
-        HAVING SUM(v.monto_ppto) > 0
-        ORDER BY ABS(SUM(v.monto_real) - SUM(v.monto_ppto)) DESC
-        LIMIT :n
-    """, params)
+        return query(
+            """SELECT COALESCE(d.nombre_cuenta, v.cuenta_codigo) AS cuenta,
+                      SUM(v.monto_real)  AS real,
+                      SUM(v.monto_ppto)  AS ppto,
+                      SUM(v.monto_real) - SUM(v.monto_ppto) AS varianza
+               FROM marts.vw_real_vs_ppto v
+               LEFT JOIN master.dim_cuentas d ON d.cuenta_codigo = v.cuenta_codigo
+               WHERE v.periodo_ref = :p
+                 AND v.clasificacion NOT IN ('INGRESO')
+                 AND v.sociedad = :soc
+               GROUP BY COALESCE(d.nombre_cuenta, v.cuenta_codigo)
+               HAVING SUM(v.monto_ppto) > 0
+               ORDER BY ABS(SUM(v.monto_real) - SUM(v.monto_ppto)) DESC
+               LIMIT :n""",
+            {"p": p, "soc": soc, "n": n},
+        )
+    return query(
+        """SELECT COALESCE(d.nombre_cuenta, v.cuenta_codigo) AS cuenta,
+                  SUM(v.monto_real)  AS real,
+                  SUM(v.monto_ppto)  AS ppto,
+                  SUM(v.monto_real) - SUM(v.monto_ppto) AS varianza
+           FROM marts.vw_real_vs_ppto v
+           LEFT JOIN master.dim_cuentas d ON d.cuenta_codigo = v.cuenta_codigo
+           WHERE v.periodo_ref = :p
+             AND v.clasificacion NOT IN ('INGRESO')
+           GROUP BY COALESCE(d.nombre_cuenta, v.cuenta_codigo)
+           HAVING SUM(v.monto_ppto) > 0
+           ORDER BY ABS(SUM(v.monto_real) - SUM(v.monto_ppto)) DESC
+           LIMIT :n""",
+        {"p": p, "n": n},
+    )
 
 
 # ── Helpers ─────────────────────────────────────────────────────

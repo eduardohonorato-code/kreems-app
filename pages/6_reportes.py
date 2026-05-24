@@ -32,7 +32,7 @@ def cargar_reportes():
                    sociedad, datos_json, analisis_ia, creado_por, creado_en
             FROM reports.reportes_guardados
             ORDER BY creado_en DESC
-        """, {})
+        """)
     except Exception as e:
         st.error(f"No se pudo cargar la tabla de reportes: {e}")
         st.info("Asegúrate de haber ejecutado: `sql/06_reportes_guardados.sql`")
