@@ -61,6 +61,9 @@ cards = [
     ("📄", "Flash Report Mensual",
      "Resumen ejecutivo de 1 página con KPIs, semáforo, top desviaciones y comentario IA. Descargable en PDF.",
      "pages/11_flash_report.py"),
+    ("📅", "Acumulado YTD",
+     "P&L acumulado enero al mes seleccionado: tabla, barras de ejecución, tendencia mensual y detalle por cuenta.",
+     "pages/12_ytd.py"),
 ]
 
 # Tarjeta de admin solo visible para admins
