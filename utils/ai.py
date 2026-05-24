@@ -271,7 +271,7 @@ def generar_analisis_flash(datos: dict, df_top=None) -> str:
     """
     Genera comentario ejecutivo breve para el Flash Report mensual.
     datos: ventas_r/p, ebit_r/p, un_r/p, gastos_r/p, periodo, sociedad
-    df_top: DataFrame con columnas cuenta, real, ppto, varianza (top desviaciones)
+    df_top: DataFrame con columnas cuenta, monto_r, monto_p, varianza (top desviaciones)
     """
     client = _get_client()
     if client is None:
@@ -284,34 +284,65 @@ def generar_analisis_flash(datos: dict, df_top=None) -> str:
     sociedad   = datos.get("sociedad", "Consolidado")
     periodo    = datos.get("periodo", "")
 
-    def _pct_str(r, p):
-        return f"{r/p*100:.1f}%" if p else "N/A"
+    def _ctx(lbl: str, r: float, p: float, es_costo: bool = False) -> str:
+        """
+        Genera descripción contextual correcta para la IA.
+        Maneja presupuestos negativos (ej. EBIT presupuestado como pérdida).
+        """
+        if p == 0:
+            return f"- {lbl}: Real {_fmt_m(r)} | Sin presupuesto definido"
+        var = r - p
+        pct = r / p * 100
+
+        # Presupuesto negativo en línea de margen/utilidad
+        if not es_costo and p < 0:
+            if r >= 0:
+                return (f"- {lbl}: Presupuesto era PÉRDIDA de {_fmt_m(abs(p))}, "
+                        f"Real fue GANANCIA de {_fmt_m(r)} → RESULTADO EXCEPCIONAL, "
+                        f"convirtió pérdida presupuestada en ganancia real "
+                        f"(varianza favorable: +{_fmt_m(abs(var))})")
+            elif abs(r) < abs(p):
+                return (f"- {lbl}: Presupuesto era PÉRDIDA de {_fmt_m(abs(p))}, "
+                        f"Real fue PÉRDIDA MENOR de {_fmt_m(abs(r))} → MEJOR QUE PRESUPUESTADO "
+                        f"(varianza favorable: +{_fmt_m(abs(var))})")
+            else:
+                return (f"- {lbl}: Presupuesto era PÉRDIDA de {_fmt_m(abs(p))}, "
+                        f"Real fue PÉRDIDA MAYOR de {_fmt_m(abs(r))} → PEOR QUE PRESUPUESTADO "
+                        f"(varianza desfavorable: {_fmt_m(var)})")
+
+        # Caso normal (ppto positivo)
+        if not es_costo:
+            estado = "superó el objetivo ✓" if pct >= 100 else f"BAJO presupuesto ✗"
+        else:
+            estado = "gasto controlado ✓" if pct <= 100 else f"SOBRE presupuesto ✗"
+        return f"- {lbl}: Real {_fmt_m(r)} vs Ppto {_fmt_m(p)} → {pct:.1f}% — {estado}"
 
     # Top 3 desviaciones como texto
     top_txt = ""
     if df_top is not None and not df_top.empty:
         for _, row in df_top.head(3).iterrows():
-            signo = "+" if float(row["varianza"]) > 0 else ""
+            var_v = float(row["varianza"])
+            signo = "+" if var_v > 0 else ""
             top_txt += (f"  - {row['cuenta'][:40]}: Real {_fmt_m(float(row['monto_r']))}, "
                         f"Ppto {_fmt_m(float(row['monto_p']))}, "
-                        f"Var {signo}{_fmt_m(float(row['varianza']))}\n")
+                        f"Var {signo}{_fmt_m(var_v)}\n")
 
     prompt = f"""Eres un controller financiero senior de una empresa chilena.
 Redacta un comentario ejecutivo MUY breve (máximo 5 oraciones) para el Flash Report mensual.
 Usa lenguaje directo y de negocios. Sin bullets, solo párrafo corrido.
 
-REGLAS:
-- Ventas: ejecución >100% es positivo; <100% es negativo.
-- Costos/Gastos: ejecución <100% es positivo (ahorro); >100% es negativo (sobre-gasto).
-- EBIT/Utilidades: >100% positivo; <100% negativo.
+IMPORTANTE: el contexto de cada línea ya incluye su interpretación correcta.
+Lee CUIDADOSAMENTE cada descripción antes de concluir si el resultado fue bueno o malo.
+Cuando dice "RESULTADO EXCEPCIONAL" o "superó el objetivo" es positivo.
+Cuando dice "PEOR QUE PRESUPUESTADO" o "SOBRE presupuesto" es negativo.
 
 EMPRESA: {sociedad} | PERIODO: {periodo}
 
 RESUMEN FINANCIERO:
-- Ventas: Real {_fmt_m(v_r)} vs Ppto {_fmt_m(v_p)} → {_pct_str(v_r, v_p)}
-- EBIT:   Real {_fmt_m(e_r)} vs Ppto {_fmt_m(e_p)} → {_pct_str(e_r, e_p)}
-- Ut.Neta:Real {_fmt_m(u_r)} vs Ppto {_fmt_m(u_p)} → {_pct_str(u_r, u_p)}
-- Gastos: Real {_fmt_m(g_r)} vs Ppto {_fmt_m(g_p)} → {_pct_str(g_r, g_p)}
+{_ctx("Ventas",   v_r, v_p, es_costo=False)}
+{_ctx("EBIT",     e_r, e_p, es_costo=False)}
+{_ctx("Ut. Neta", u_r, u_p, es_costo=False)}
+{_ctx("Gastos",   g_r, g_p, es_costo=True)}
 
 TOP DESVIACIONES EN COSTOS:
 {top_txt if top_txt else "  Sin datos de detalle."}

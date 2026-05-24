@@ -125,6 +125,25 @@ def _fmt(v: float) -> str:
     return f"${v/1_000_000:,.2f}M"
 
 
+def _pct_label(real: float, ppto: float, inv: bool = False) -> str:
+    """
+    Texto para mostrar en KPI cards y semáforo.
+    Cuando ppto < 0 el % real/ppto pierde sentido, se muestra etiqueta descriptiva.
+    """
+    if ppto == 0:
+        return "Sin ppto"
+    pct = real / ppto * 100
+    if not inv and ppto < 0:
+        # Línea de margen/utilidad con ppto en pérdida
+        if real >= 0:
+            return "▲ Superó ppto"          # budgeted loss → actual profit
+        elif abs(real) < abs(ppto):
+            return "▲ Pérdida reducida"     # smaller loss than budgeted
+        else:
+            return "▼ Pérdida mayor"        # larger loss than budgeted
+    return f"{pct:.1f}% ppto"
+
+
 def _sem_color(pct: float, inv: bool = False, ppto_val: float = 1.0) -> str:
     """
     inv=True  → costos (menor ejecución = mejor).
@@ -266,14 +285,15 @@ with col_prev:
         ("Ut. Neta",  u_r, u_p, pct_u, False),
         ("Gastos",    g_r, g_p, pct_g, True),
     ]:
-        col_k = _sem_color(pct, inv, ppto_val=p)
+        col_k    = _sem_color(pct, inv, ppto_val=p)
+        lbl_pct  = _pct_label(r, p, inv)
         kpis_html += f"""
         <div style="flex:1;background:#fff;border:1px solid #E2E8F0;border-radius:10px;
                     padding:14px 10px;text-align:center;border-top:3px solid {col_k};">
             <div style="font-size:9px;color:#94A3B8;font-weight:700;text-transform:uppercase;
                         letter-spacing:.8px;margin-bottom:4px;">{lbl}</div>
             <div style="font-size:17px;font-weight:800;color:#2d0050;margin-bottom:2px;">{_fmt(r)}</div>
-            <div style="font-size:11px;font-weight:700;color:{col_k};">{pct:.1f}% ppto</div>
+            <div style="font-size:11px;font-weight:700;color:{col_k};">{lbl_pct}</div>
             <div style="font-size:9px;color:#94A3B8;margin-top:2px;">Obj: {_fmt(p)}</div>
         </div>"""
 
@@ -313,7 +333,7 @@ with col_prev:
                          letter-spacing:.5px;">Estado General:</span>
             <span style="font-size:13px;font-weight:700;">{sem_g_label}</span>
             <span style="font-size:10px;color:#94A3B8;">
-                Ventas {pct_v:.1f}% &nbsp;·&nbsp; EBIT {pct_e:.1f}% &nbsp;·&nbsp; Ut.Neta {pct_u:.1f}%
+                Ventas {_pct_label(v_r, v_p)} &nbsp;·&nbsp; EBIT {_pct_label(e_r, e_p)} &nbsp;·&nbsp; Ut.Neta {_pct_label(u_r, u_p)}
             </span>
         </div>
 
@@ -368,21 +388,22 @@ with col_prev:
 with col_side:
     st.markdown("#### KPI Semáforo")
 
-    for lbl, pct, inv, pval in [
-        ("Ventas",       pct_v,  False, v_p),
-        ("Ut. Bruta",    pct_ub, False, ub_p),
-        ("EBIT",         pct_e,  False, e_p),
-        ("Ut. Neta",     pct_u,  False, u_p),
-        ("Gastos Total", pct_g,  True,  g_p),
+    for lbl, r, p, pct, inv in [
+        ("Ventas",       v_r,  v_p,  pct_v,  False),
+        ("Ut. Bruta",    ub_r, ub_p, pct_ub, False),
+        ("EBIT",         e_r,  e_p,  pct_e,  False),
+        ("Ut. Neta",     u_r,  u_p,  pct_u,  False),
+        ("Gastos Total", g_r,  g_p,  pct_g,  True),
     ]:
-        icono = "🟢" if _sem_color(pct, inv, ppto_val=pval) == "#0F6E56" else (
-                "🟡" if _sem_color(pct, inv, ppto_val=pval) == "#b45309" else "🔴")
-        col_txt = _sem_color(pct, inv, ppto_val=pval)
+        icono = "🟢" if _sem_color(pct, inv, ppto_val=p) == "#0F6E56" else (
+                "🟡" if _sem_color(pct, inv, ppto_val=p) == "#b45309" else "🔴")
+        col_txt  = _sem_color(pct, inv, ppto_val=p)
+        lbl_pct  = _pct_label(r, p, inv)
         st.markdown(
             f"<div style='display:flex;justify-content:space-between;"
             f"padding:6px 0;border-bottom:1px solid #F1F5F9;font-size:13px;'>"
             f"<span>{icono} {lbl}</span>"
-            f"<span style='color:{col_txt};font-weight:700;'>{pct:.1f}%</span></div>",
+            f"<span style='color:{col_txt};font-weight:700;'>{lbl_pct}</span></div>",
             unsafe_allow_html=True,
         )
 
