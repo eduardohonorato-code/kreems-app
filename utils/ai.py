@@ -265,3 +265,66 @@ Sé directo. Usa $M. No más de 250 palabras."""
         return chat.choices[0].message.content
     except Exception as e:
         return f"❌ Error al generar análisis: {e}"
+
+
+def generar_analisis_flash(datos: dict, df_top=None) -> str:
+    """
+    Genera comentario ejecutivo breve para el Flash Report mensual.
+    datos: ventas_r/p, ebit_r/p, un_r/p, gastos_r/p, periodo, sociedad
+    df_top: DataFrame con columnas cuenta, real, ppto, varianza (top desviaciones)
+    """
+    client = _get_client()
+    if client is None:
+        return "⚠ API key no configurada. Agrega `[groq] api_key` en `.streamlit/secrets.toml`."
+
+    v_r, v_p   = datos["ventas_r"], datos["ventas_p"]
+    e_r, e_p   = datos["ebit_r"],   datos["ebit_p"]
+    u_r, u_p   = datos["un_r"],     datos["un_p"]
+    g_r, g_p   = datos["gastos_r"], datos["gastos_p"]
+    sociedad   = datos.get("sociedad", "Consolidado")
+    periodo    = datos.get("periodo", "")
+
+    def _pct_str(r, p):
+        return f"{r/p*100:.1f}%" if p else "N/A"
+
+    # Top 3 desviaciones como texto
+    top_txt = ""
+    if df_top is not None and not df_top.empty:
+        for _, row in df_top.head(3).iterrows():
+            signo = "+" if float(row["varianza"]) > 0 else ""
+            top_txt += (f"  - {row['cuenta'][:40]}: Real {_fmt_m(float(row['real']))}, "
+                        f"Ppto {_fmt_m(float(row['ppto']))}, "
+                        f"Var {signo}{_fmt_m(float(row['varianza']))}\n")
+
+    prompt = f"""Eres un controller financiero senior de una empresa chilena.
+Redacta un comentario ejecutivo MUY breve (máximo 5 oraciones) para el Flash Report mensual.
+Usa lenguaje directo y de negocios. Sin bullets, solo párrafo corrido.
+
+REGLAS:
+- Ventas: ejecución >100% es positivo; <100% es negativo.
+- Costos/Gastos: ejecución <100% es positivo (ahorro); >100% es negativo (sobre-gasto).
+- EBIT/Utilidades: >100% positivo; <100% negativo.
+
+EMPRESA: {sociedad} | PERIODO: {periodo}
+
+RESUMEN FINANCIERO:
+- Ventas: Real {_fmt_m(v_r)} vs Ppto {_fmt_m(v_p)} → {_pct_str(v_r, v_p)}
+- EBIT:   Real {_fmt_m(e_r)} vs Ppto {_fmt_m(e_p)} → {_pct_str(e_r, e_p)}
+- Ut.Neta:Real {_fmt_m(u_r)} vs Ppto {_fmt_m(u_p)} → {_pct_str(u_r, u_p)}
+- Gastos: Real {_fmt_m(g_r)} vs Ppto {_fmt_m(g_p)} → {_pct_str(g_r, g_p)}
+
+TOP DESVIACIONES EN COSTOS:
+{top_txt if top_txt else "  Sin datos de detalle."}
+
+Redacta el comentario ejecutivo (máximo 5 oraciones, en español):"""
+
+    try:
+        chat = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=400,
+            temperature=0.3,
+        )
+        return chat.choices[0].message.content
+    except Exception as e:
+        return f"❌ Error al generar análisis: {e}"
