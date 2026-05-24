@@ -421,6 +421,15 @@ def generar_flash_report(
     def T(txt: str) -> str:
         return txt if _unicode_ok else _safe(txt)
 
+    def _sem_c(pct: float, inv: bool = False, pval: float = 1.0) -> tuple:
+        """Color semáforo con corrección para presupuesto negativo."""
+        if not inv and pval < 0:
+            inv = True
+        if not inv:
+            return C_GREEN if pct >= 100 else (C_RED if pct < 90 else (181, 69, 9))
+        else:
+            return C_GREEN if pct <= 90 else (C_RED if pct > 100 else (181, 69, 9))
+
     pdf.add_page()
     pdf.set_margins(0, 0, 0)
 
@@ -448,11 +457,8 @@ def generar_flash_report(
 
     for i, (lbl, r, p, pct, inv) in enumerate(kpis):
         x = x0 + i * (card_w + 2)
-        # color semáforo
-        if not inv:
-            cvar = C_GREEN if pct >= 100 else (C_RED if pct < 90 else (181, 69, 9))
-        else:
-            cvar = C_GREEN if pct <= 90 else (C_RED if pct > 100 else (181, 69, 9))
+        # color semáforo (corrige cuando ppto es negativo)
+        cvar = _sem_c(pct, inv, pval=p)
 
         pdf.set_draw_color(*C_BORDER)
         pdf.set_fill_color(*C_WHITE)
@@ -567,12 +573,13 @@ def generar_flash_report(
     _section_hdr(col_mid + 2, y_body, "EJECUCION P&L", 99)
     y_bar = y_body + 9
 
+    pct_ub = (ub_r / ub_p * 100) if ub_p else 0
     lineas_pl = [
-        ("Ventas",       v_r,   v_p,   pct_v,  False),
-        ("Ut. Bruta",    ub_r,  ub_p,  (ub_r/ub_p*100) if ub_p else 0, False),
-        ("EBIT",         e_r,   e_p,   pct_e,  False),
-        ("Ut. Neta",     u_r,   u_p,   pct_u,  False),
-        ("Gastos Total", g_r,   g_p,   pct_g,  True),
+        ("Ventas",       v_r,   v_p,  pct_v,  False),
+        ("Ut. Bruta",    ub_r,  ub_p, pct_ub, False),
+        ("EBIT",         e_r,   e_p,  pct_e,  False),
+        ("Ut. Neta",     u_r,   u_p,  pct_u,  False),
+        ("Gastos Total", g_r,   g_p,  pct_g,  True),
     ]
     bar_area_w = 88
     bar_h_px   = 4
@@ -580,10 +587,8 @@ def generar_flash_report(
     for lbl, r, p, pct, inv in lineas_pl:
         if y_bar + 12 > 245:
             break
-        if not inv:
-            cbar = C_GREEN if pct >= 100 else (C_RED if pct < 90 else (181, 69, 9))
-        else:
-            cbar = C_GREEN if pct <= 90 else (C_RED if pct > 100 else (181, 69, 9))
+        # color semáforo con corrección para ppto negativo
+        cbar = _sem_c(pct, inv, pval=p)
 
         # Label + porcentaje
         pdf.set_xy(col_mid + 3, y_bar)
