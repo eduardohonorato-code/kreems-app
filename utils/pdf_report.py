@@ -399,7 +399,7 @@ def generar_flash_report(
             self.set_y(-10)
             self.set_font(FONT_NAME, "I", 6.5)
             self.set_text_color(*C_GRAY)
-            self.cell(0, 4, f"Kreems FP&A  —  Flash Report {titulo}  —  {_date.today().strftime('%d/%m/%Y')}", align="C")
+            self.cell(0, 4, f"Kreems FP&A  -  Flash Report {titulo}  -  {_date.today().strftime('%d/%m/%Y')}", align="C")
 
     pdf = FlashPDF(orientation="P", unit="mm", format="A4")
     pdf.set_auto_page_break(auto=False)

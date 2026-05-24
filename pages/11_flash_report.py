@@ -125,7 +125,17 @@ def _fmt(v: float) -> str:
     return f"${v/1_000_000:,.2f}M"
 
 
-def _sem_color(pct: float, inv: bool = False) -> str:
+def _sem_color(pct: float, inv: bool = False, ppto_val: float = 1.0) -> str:
+    """
+    inv=True  → costos (menor ejecución = mejor).
+    ppto_val  → cuando el presupuesto es negativo (p.ej. EBIT en pérdida),
+                pct = real/ppto invierte su sentido: 200% significa PEOR,
+                no mejor. Se corrige invirtiendo la lógica de ingreso.
+    """
+    # Presupuesto negativo en item de ingreso/margen → invertir comparación
+    if not inv and ppto_val < 0:
+        inv = True
+
     if not inv:
         if pct >= 100: return "#0F6E56"
         if pct >= 90:  return "#b45309"
@@ -136,7 +146,13 @@ def _sem_color(pct: float, inv: bool = False) -> str:
         return "#cc0000"
 
 
-def _sem_label(pct: float) -> str:
+def _sem_label(pct: float, ppto_val: float = 1.0) -> str:
+    """Etiqueta textual del semáforo, considerando presupuesto negativo."""
+    if ppto_val < 0:
+        # Invertir: pct > 100% es malo (más pérdida de la esperada)
+        if pct <= 100: return "🟢 OK"
+        if pct <= 110: return "🟡 Atención"
+        return "🔴 Alerta"
     if pct >= 100: return "🟢 OK"
     if pct >= 90:  return "🟡 Atención"
     return "🔴 Alerta"
@@ -220,15 +236,15 @@ with col_prev:
 
     # ── Barras P&L ───────────────────────────────────────────────
     lineas_barra = [
-        ("Ventas",       pct_v,  False),
-        ("Ut. Bruta",    pct_ub, False),
-        ("EBIT",         pct_e,  False),
-        ("Ut. Neta",     pct_u,  False),
-        ("Gastos Total", pct_g,  True),
+        ("Ventas",       pct_v,  False, v_p),
+        ("Ut. Bruta",    pct_ub, False, ub_p),
+        ("EBIT",         pct_e,  False, e_p),
+        ("Ut. Neta",     pct_u,  False, u_p),
+        ("Gastos Total", pct_g,  True,  g_p),
     ]
     barras_html = ""
-    for lbl, pct, inv in lineas_barra:
-        col_bar = _sem_color(pct, inv)
+    for lbl, pct, inv, pval in lineas_barra:
+        col_bar = _sem_color(pct, inv, ppto_val=pval)
         bar_w   = min(pct, 130)
         barras_html += f"""
         <div style="margin-bottom:10px;">
@@ -250,7 +266,7 @@ with col_prev:
         ("Ut. Neta",  u_r, u_p, pct_u, False),
         ("Gastos",    g_r, g_p, pct_g, True),
     ]:
-        col_k = _sem_color(pct, inv)
+        col_k = _sem_color(pct, inv, ppto_val=p)
         kpis_html += f"""
         <div style="flex:1;background:#fff;border:1px solid #E2E8F0;border-radius:10px;
                     padding:14px 10px;text-align:center;border-top:3px solid {col_k};">
@@ -262,7 +278,7 @@ with col_prev:
         </div>"""
 
     # ── Semáforo global ──────────────────────────────────────────
-    sem_g_label = _sem_label(pct_v)
+    sem_g_label = _sem_label(pct_v, ppto_val=v_p)
 
     # ── HTML PREVIEW COMPLETO ─────────────────────────────────────
     # Nota: se renderiza con components.html() (iframe) para evitar que
@@ -352,16 +368,16 @@ with col_prev:
 with col_side:
     st.markdown("#### KPI Semáforo")
 
-    for lbl, pct, inv in [
-        ("Ventas",       pct_v,  False),
-        ("Ut. Bruta",    pct_ub, False),
-        ("EBIT",         pct_e,  False),
-        ("Ut. Neta",     pct_u,  False),
-        ("Gastos Total", pct_g,  True),
+    for lbl, pct, inv, pval in [
+        ("Ventas",       pct_v,  False, v_p),
+        ("Ut. Bruta",    pct_ub, False, ub_p),
+        ("EBIT",         pct_e,  False, e_p),
+        ("Ut. Neta",     pct_u,  False, u_p),
+        ("Gastos Total", pct_g,  True,  g_p),
     ]:
-        icono = "🟢" if _sem_color(pct, inv) == "#0F6E56" else (
-                "🟡" if _sem_color(pct, inv) == "#b45309" else "🔴")
-        col_txt = _sem_color(pct, inv)
+        icono = "🟢" if _sem_color(pct, inv, ppto_val=pval) == "#0F6E56" else (
+                "🟡" if _sem_color(pct, inv, ppto_val=pval) == "#b45309" else "🔴")
+        col_txt = _sem_color(pct, inv, ppto_val=pval)
         st.markdown(
             f"<div style='display:flex;justify-content:space-between;"
             f"padding:6px 0;border-bottom:1px solid #F1F5F9;font-size:13px;'>"
