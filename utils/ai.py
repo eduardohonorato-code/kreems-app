@@ -292,8 +292,8 @@ def generar_analisis_flash(datos: dict, df_top=None) -> str:
     if df_top is not None and not df_top.empty:
         for _, row in df_top.head(3).iterrows():
             signo = "+" if float(row["varianza"]) > 0 else ""
-            top_txt += (f"  - {row['cuenta'][:40]}: Real {_fmt_m(float(row['real']))}, "
-                        f"Ppto {_fmt_m(float(row['ppto']))}, "
+            top_txt += (f"  - {row['cuenta'][:40]}: Real {_fmt_m(float(row['monto_r']))}, "
+                        f"Ppto {_fmt_m(float(row['monto_p']))}, "
                         f"Var {signo}{_fmt_m(float(row['varianza']))}\n")
 
     prompt = f"""Eres un controller financiero senior de una empresa chilena.

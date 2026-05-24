@@ -61,12 +61,13 @@ with c3:
 
 # ── Queries ─────────────────────────────────────────────────────
 def _load_pl(p: str, soc: str) -> pd.DataFrame:
-    """Sin @st.cache_data propio — query() ya está cacheada."""
+    """Sin @st.cache_data propio — query() ya está cacheada.
+    Alias monto_r / monto_p evitan chocar con palabras reservadas de PostgreSQL."""
     if soc != "Consolidado":
         return query(
             """SELECT clasificacion,
-                      SUM(monto_real) AS real,
-                      SUM(monto_ppto) AS ppto
+                      SUM(monto_real) AS monto_r,
+                      SUM(monto_ppto) AS monto_p
                FROM marts.vw_real_vs_ppto
                WHERE periodo_ref = :p AND sociedad = :soc
                GROUP BY clasificacion""",
@@ -74,8 +75,8 @@ def _load_pl(p: str, soc: str) -> pd.DataFrame:
         )
     return query(
         """SELECT clasificacion,
-                  SUM(monto_real) AS real,
-                  SUM(monto_ppto) AS ppto
+                  SUM(monto_real) AS monto_r,
+                  SUM(monto_ppto) AS monto_p
            FROM marts.vw_real_vs_ppto
            WHERE periodo_ref = :p
            GROUP BY clasificacion""",
@@ -88,8 +89,8 @@ def _load_top_desv(p: str, soc: str, n: int = 7) -> pd.DataFrame:
     if soc != "Consolidado":
         return query(
             """SELECT COALESCE(d.nombre_cuenta, v.cuenta_codigo) AS cuenta,
-                      SUM(v.monto_real)  AS real,
-                      SUM(v.monto_ppto)  AS ppto,
+                      SUM(v.monto_real)  AS monto_r,
+                      SUM(v.monto_ppto)  AS monto_p,
                       SUM(v.monto_real) - SUM(v.monto_ppto) AS varianza
                FROM marts.vw_real_vs_ppto v
                LEFT JOIN master.dim_cuentas d ON d.cuenta_codigo = v.cuenta_codigo
@@ -104,8 +105,8 @@ def _load_top_desv(p: str, soc: str, n: int = 7) -> pd.DataFrame:
         )
     return query(
         """SELECT COALESCE(d.nombre_cuenta, v.cuenta_codigo) AS cuenta,
-                  SUM(v.monto_real)  AS real,
-                  SUM(v.monto_ppto)  AS ppto,
+                  SUM(v.monto_real)  AS monto_r,
+                  SUM(v.monto_ppto)  AS monto_p,
                   SUM(v.monto_real) - SUM(v.monto_ppto) AS varianza
            FROM marts.vw_real_vs_ppto v
            LEFT JOIN master.dim_cuentas d ON d.cuenta_codigo = v.cuenta_codigo
@@ -126,12 +127,12 @@ def _gv(df: pd.DataFrame, cls: str, col: str) -> float:
 
 
 def _build_datos(df: pd.DataFrame) -> dict:
-    v_r = _gv(df, "INGRESO",        "real");  v_p = _gv(df, "INGRESO",        "ppto")
-    c_r = _gv(df, "COSTO_VAR",      "real");  c_p = _gv(df, "COSTO_VAR",      "ppto")
-    f_r = _gv(df, "COSTO_FIJO",     "real");  f_p = _gv(df, "COSTO_FIJO",     "ppto")
-    o_r = _gv(df, "OPEX",           "real");  o_p = _gv(df, "OPEX",           "ppto")
-    n_r = _gv(df, "FINANCIERO",     "real");  n_p = _gv(df, "FINANCIERO",     "ppto")
-    x_r = _gv(df, "NO_OPERACIONAL", "real");  x_p = _gv(df, "NO_OPERACIONAL", "ppto")
+    v_r = _gv(df, "INGRESO",        "monto_r");  v_p = _gv(df, "INGRESO",        "monto_p")
+    c_r = _gv(df, "COSTO_VAR",      "monto_r");  c_p = _gv(df, "COSTO_VAR",      "monto_p")
+    f_r = _gv(df, "COSTO_FIJO",     "monto_r");  f_p = _gv(df, "COSTO_FIJO",     "monto_p")
+    o_r = _gv(df, "OPEX",           "monto_r");  o_p = _gv(df, "OPEX",           "monto_p")
+    n_r = _gv(df, "FINANCIERO",     "monto_r");  n_p = _gv(df, "FINANCIERO",     "monto_p")
+    x_r = _gv(df, "NO_OPERACIONAL", "monto_r");  x_p = _gv(df, "NO_OPERACIONAL", "monto_p")
 
     ub_r = v_r - c_r;                    ub_p = v_p - c_p
     ei_r = ub_r - f_r - o_r;            ei_p = ub_p - f_p - o_p
@@ -228,18 +229,20 @@ with col_prev:
     # ── Construir filas de top desviaciones ─────────────────────
     top_rows_html = ""
     for _, row in df_top.iterrows():
-        v_abs = abs(float(row["varianza"]))
-        prow  = float(row["real"]) / float(row["ppto"]) * 100 if row["ppto"] else 0
-        color = "#cc0000" if float(row["varianza"]) > 0 else "#0F6E56"
-        signo = "+" if float(row["varianza"]) >= 0 else ""
+        r_val  = float(row["monto_r"])
+        p_val  = float(row["monto_p"])
+        var_v  = float(row["varianza"])
+        prow   = r_val / p_val * 100 if p_val else 0
+        color  = "#cc0000" if var_v > 0 else "#0F6E56"
+        signo  = "+" if var_v >= 0 else ""
         cuenta_display = str(row["cuenta"])[:38]
         top_rows_html += f"""
         <tr style="border-bottom:1px solid #F1F5F9;">
             <td style="padding:5px 8px;font-size:11px;color:#0F172A;">{cuenta_display}</td>
-            <td style="padding:5px 8px;font-size:11px;text-align:right;color:#0F172A;">{_fmt(float(row['real']))}</td>
-            <td style="padding:5px 8px;font-size:11px;text-align:right;color:#64748b;">{_fmt(float(row['ppto']))}</td>
+            <td style="padding:5px 8px;font-size:11px;text-align:right;color:#0F172A;">{_fmt(r_val)}</td>
+            <td style="padding:5px 8px;font-size:11px;text-align:right;color:#64748b;">{_fmt(p_val)}</td>
             <td style="padding:5px 8px;font-size:11px;text-align:right;color:{color};font-weight:600;">
-                {signo}{_fmt(float(row['varianza']))}</td>
+                {signo}{_fmt(var_v)}</td>
             <td style="padding:5px 8px;font-size:11px;text-align:right;color:{color};">{prow:.1f}%</td>
         </tr>"""
 

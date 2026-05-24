@@ -537,8 +537,8 @@ def generar_flash_report(
     for _, row in (df_top.head(7) if not df_top.empty else _pd.DataFrame()).iterrows():
         if y_tbl + 5 > 240:
             break
-        real_v = float(row["real"])
-        ppto_v = float(row["ppto"])
+        real_v = float(row["monto_r"])
+        ppto_v = float(row["monto_p"])
         var_v  = float(row["varianza"])
         pct_row = real_v / ppto_v * 100 if ppto_v else 0
         cvar   = C_RED if var_v > 0 else C_GREEN
