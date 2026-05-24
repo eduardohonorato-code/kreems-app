@@ -267,6 +267,147 @@ Sé directo. Usa $M. No más de 250 palabras."""
         return f"❌ Error al generar análisis: {e}"
 
 
+def generar_analisis_riesgos(datos: dict) -> str:
+    """
+    Genera análisis FP&A del portafolio de riesgos y oportunidades.
+
+    datos = {
+        "periodo":          "2026-05",
+        "sociedad":         "Todas",
+        "n_riesgos":        int,
+        "n_oportunidades":  int,
+        "exposicion_total": float (pesos),
+        "upside_total":     float (pesos),
+        "balance_neto":     float (pesos),
+        "riesgos": [
+            {"nombre", "categoria", "probabilidad", "impacto_nivel",
+             "impacto_monto", "descripcion", "plan_accion",
+             "responsable", "fecha_vcto"}
+        ],
+        "oportunidades": [...mismo esquema...]
+    }
+    """
+    client = _get_client()
+    if client is None:
+        return "⚠ API key no configurada. Agrega `[groq] api_key` en `.streamlit/secrets.toml`."
+
+    periodo    = datos.get("periodo", "")
+    sociedad   = datos.get("sociedad", "Consolidado")
+    exp_total  = datos.get("exposicion_total", 0)
+    ups_total  = datos.get("upside_total", 0)
+    bal_neto   = datos.get("balance_neto", 0)
+    riesgos    = datos.get("riesgos", [])
+    oports     = datos.get("oportunidades", [])
+
+    # Valor esperado ajustado por probabilidad
+    PROB_PCT = {"ALTA": 0.75, "MEDIA": 0.45, "BAJA": 0.20}
+    ve_riesgos = sum(
+        (r.get("impacto_monto") or 0) * PROB_PCT.get(r.get("probabilidad", "MEDIA"), 0.45)
+        for r in riesgos
+    )
+    ve_oports = sum(
+        (o.get("impacto_monto") or 0) * PROB_PCT.get(o.get("probabilidad", "MEDIA"), 0.45)
+        for o in oports
+    )
+    ve_neto = ve_oports - ve_riesgos
+
+    def _fmt_m(v): return f"${v/1_000_000:,.2f}M" if v else "N/D"
+    def _fmt_r(r):
+        vcto = f", vto: {r['fecha_vcto']}" if r.get("fecha_vcto") else ""
+        desc = f" | Desc: {str(r.get('descripcion',''))[:80]}" if r.get("descripcion") else ""
+        plan = f" | Plan: {str(r.get('plan_accion',''))[:60]}" if r.get("plan_accion") else ""
+        return (
+            f"  · {r['nombre']} [{r['categoria']}]"
+            f" — Prob:{r['probabilidad']} | Impacto:{r['impacto_nivel']}"
+            f" | Monto:{_fmt_m(r.get('impacto_monto') or 0)}"
+            f" | VE:{_fmt_m((r.get('impacto_monto') or 0) * PROB_PCT.get(r.get('probabilidad','MEDIA'),0.45))}"
+            f"{vcto}{desc}{plan}"
+        )
+
+    bloque_riesgos = "\n".join(_fmt_r(r) for r in riesgos) if riesgos else "  (ninguno registrado)"
+    bloque_oports  = "\n".join(_fmt_r(o) for o in oports)  if oports  else "  (ninguna registrada)"
+
+    prompt = f"""Eres un Director de FP&A con 15 años de experiencia en análisis de riesgos financieros corporativos.
+Tu misión es analizar el portafolio de riesgos y oportunidades de la empresa y generar un informe ejecutivo
+de alto valor para la Gerencia General y el CFO. El análisis debe ser riguroso, cuantitativo y orientado a decisiones.
+
+EMPRESA: {sociedad} | PERÍODO DE REFERENCIA: {periodo}
+
+═══════════════════════════════════════════
+PORTAFOLIO CONSOLIDADO
+═══════════════════════════════════════════
+Riesgos activos:      {len(riesgos)}
+Oportunidades activas:{len(oports)}
+Exposición total:     {_fmt_m(exp_total)}   ← pérdida máxima si todos se materializan
+Upside total:         {_fmt_m(ups_total)}   ← ganancia máxima si todas se capturan
+Balance bruto:        {_fmt_m(bal_neto)}
+
+Valor Esperado ajustado por probabilidad:
+  VE riesgos (ponderado):      -{_fmt_m(ve_riesgos)}
+  VE oportunidades (ponderado): +{_fmt_m(ve_oports)}
+  VE neto portafolio:           {'+' if ve_neto >= 0 else ''}{_fmt_m(abs(ve_neto))} {'(favorable)' if ve_neto >= 0 else '(desfavorable)'}
+
+═══════════════════════════════════════════
+RIESGOS REGISTRADOS
+═══════════════════════════════════════════
+{bloque_riesgos}
+
+═══════════════════════════════════════════
+OPORTUNIDADES REGISTRADAS
+═══════════════════════════════════════════
+{bloque_oports}
+
+═══════════════════════════════════════════
+INSTRUCCIONES DE ANÁLISIS
+═══════════════════════════════════════════
+Genera un informe ejecutivo FP&A estructurado exactamente así (en español, sin markdown extra):
+
+POSICIÓN DE RIESGO DEL PERÍODO
+(2-3 oraciones: evalúa si el portafolio está equilibrado, si la exposición es material vs el negocio,
+y si el valor esperado neto es preocupante o manejable. Tono de director financiero senior.)
+
+RIESGOS CRÍTICOS — PRIORIDAD DE GESTIÓN
+(Lista los 3 riesgos de mayor valor esperado o impacto estratégico. Para cada uno indica:
+qué lo hace crítico, qué podría detonar su materialización, e impacto estimado en EBIT/Ut.Neta.
+Si hay menos de 3 riesgos, analiza los que hay en profundidad.)
+
+OPORTUNIDADES DE CAPTURA
+(Evalúa las oportunidades más relevantes: cuáles tienen mayor probabilidad de concretarse,
+qué acciones acelerarían su captura, y su potencial impacto en resultados.
+Si no hay oportunidades, indica qué tipo de oportunidades debería estar buscando la empresa.)
+
+ANÁLISIS DE ESCENARIOS — IMPACTO EN UTILIDAD NETA
+Escenario pesimista: (todos los riesgos se materializan, 0 oportunidades capturadas)
+Escenario base:      (valor esperado ponderado por probabilidad)
+Escenario optimista: (0 riesgos, todas las oportunidades capturadas)
+(Para cada escenario: impacto estimado en $M y recomendación de provisión o buffer presupuestario)
+
+SEÑALES DE ALERTA TEMPRANA
+(3-4 indicadores concretos que el equipo FP&A debe monitorear mensualmente para detectar
+la materialización de los riesgos más críticos antes de que impacten en los estados financieros.
+Ej: variación en volumen de ventas, variaciones de tipo de cambio, ratios de cobertura, etc.)
+
+RECOMENDACIONES EJECUTIVAS
+1. (Acción concreta con nombre del riesgo/oportunidad afectado, plazo y responsable sugerido)
+2. (ídem)
+3. (ídem)
+(Máximo 3 recomendaciones priorizadas por impacto financiero esperado.)
+
+Usa cifras en $M. Sé directo y riguroso. Evita generalidades — cada afirmación debe estar
+respaldada por los datos del portafolio. Este informe es para el CFO y la Gerencia General."""
+
+    try:
+        chat = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1400,
+            temperature=0.25,
+        )
+        return chat.choices[0].message.content
+    except Exception as e:
+        return f"❌ Error al generar análisis: {e}"
+
+
 def generar_analisis_flash(datos: dict, df_top=None) -> str:
     """
     Genera comentario ejecutivo breve para el Flash Report mensual.
