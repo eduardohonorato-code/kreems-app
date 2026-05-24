@@ -47,7 +47,7 @@ with c1:
 
 with c2:
     df_soc = query("SELECT DISTINCT sociedad FROM marts.vw_real_vs_ppto ORDER BY sociedad")
-    opciones_soc = ["Consolidado"] + (df_soc["sociedad"].tolist() if not df_soc.empty else [])
+    opciones_soc = ["Todas"] + (df_soc["sociedad"].tolist() if not df_soc.empty else [])
     sociedad = st.selectbox("Sociedad", opciones_soc)
 
 with c3:
@@ -61,63 +61,35 @@ with c3:
 
 # ── Queries ─────────────────────────────────────────────────────
 def _load_pl(p: str, soc: str) -> pd.DataFrame:
-    """Sin @st.cache_data propio — query() ya está cacheada.
-    Alias monto_r / monto_p evitan chocar con palabras reservadas de PostgreSQL."""
-    if soc != "Consolidado":
-        return query(
-            """SELECT clasificacion,
-                      SUM(monto_real) AS monto_r,
-                      SUM(monto_ppto) AS monto_p
-               FROM marts.vw_real_vs_ppto
-               WHERE periodo_ref = :p AND sociedad = :soc
-               GROUP BY clasificacion""",
-            {"p": p, "soc": soc},
-        )
-    return query(
-        """SELECT clasificacion,
-                  SUM(monto_real) AS monto_r,
-                  SUM(monto_ppto) AS monto_p
-           FROM marts.vw_real_vs_ppto
-           WHERE periodo_ref = :p
-           GROUP BY clasificacion""",
-        {"p": p},
-    )
+    """Mismo patrón que EERR: valor_real/valor_ppto, filtro_soc como f-string."""
+    filtro_soc = f"AND sociedad = '{soc}'" if soc != "Todas" else ""
+    return query(f"""
+        SELECT clasificacion,
+               SUM(valor_real) AS monto_r,
+               SUM(valor_ppto) AS monto_p
+        FROM marts.vw_real_vs_ppto
+        WHERE periodo = :p {filtro_soc}
+        GROUP BY clasificacion
+    """, {"p": p})
 
 
 def _load_top_desv(p: str, soc: str, n: int = 7) -> pd.DataFrame:
-    """Sin @st.cache_data propio — query() ya está cacheada."""
-    if soc != "Consolidado":
-        return query(
-            """SELECT COALESCE(d.nombre_cuenta, v.cuenta_codigo) AS cuenta,
-                      SUM(v.monto_real)  AS monto_r,
-                      SUM(v.monto_ppto)  AS monto_p,
-                      SUM(v.monto_real) - SUM(v.monto_ppto) AS varianza
-               FROM marts.vw_real_vs_ppto v
-               LEFT JOIN master.dim_cuentas d ON d.cuenta_codigo = v.cuenta_codigo
-               WHERE v.periodo_ref = :p
-                 AND v.clasificacion NOT IN ('INGRESO')
-                 AND v.sociedad = :soc
-               GROUP BY COALESCE(d.nombre_cuenta, v.cuenta_codigo)
-               HAVING SUM(v.monto_ppto) > 0
-               ORDER BY ABS(SUM(v.monto_real) - SUM(v.monto_ppto)) DESC
-               LIMIT :n""",
-            {"p": p, "soc": soc, "n": n},
-        )
-    return query(
-        """SELECT COALESCE(d.nombre_cuenta, v.cuenta_codigo) AS cuenta,
-                  SUM(v.monto_real)  AS monto_r,
-                  SUM(v.monto_ppto)  AS monto_p,
-                  SUM(v.monto_real) - SUM(v.monto_ppto) AS varianza
-           FROM marts.vw_real_vs_ppto v
-           LEFT JOIN master.dim_cuentas d ON d.cuenta_codigo = v.cuenta_codigo
-           WHERE v.periodo_ref = :p
-             AND v.clasificacion NOT IN ('INGRESO')
-           GROUP BY COALESCE(d.nombre_cuenta, v.cuenta_codigo)
-           HAVING SUM(v.monto_ppto) > 0
-           ORDER BY ABS(SUM(v.monto_real) - SUM(v.monto_ppto)) DESC
-           LIMIT :n""",
-        {"p": p, "n": n},
-    )
+    """Top N cuentas por desviación absoluta. nombre_cuenta ya está en la vista."""
+    filtro_soc = f"AND sociedad = '{soc}'" if soc != "Todas" else ""
+    return query(f"""
+        SELECT nombre_cuenta AS cuenta,
+               SUM(valor_real)  AS monto_r,
+               SUM(valor_ppto)  AS monto_p,
+               SUM(valor_real) - SUM(valor_ppto) AS varianza
+        FROM marts.vw_real_vs_ppto
+        WHERE periodo = :p
+          AND clasificacion NOT IN ('INGRESO')
+          {filtro_soc}
+        GROUP BY nombre_cuenta
+        HAVING SUM(valor_ppto) > 0
+        ORDER BY ABS(SUM(valor_real) - SUM(valor_ppto)) DESC
+        LIMIT :n
+    """, {"p": p, "n": n})
 
 
 # ── Helpers ─────────────────────────────────────────────────────
