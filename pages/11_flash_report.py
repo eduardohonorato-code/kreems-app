@@ -63,6 +63,9 @@ with c3:
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_pl(p: str, soc: str) -> pd.DataFrame:
     filtro = "AND sociedad = :soc" if soc != "Consolidado" else ""
+    params: dict = {"p": p}
+    if soc != "Consolidado":
+        params["soc"] = soc
     return query(f"""
         SELECT clasificacion,
                SUM(monto_real) AS real,
@@ -70,12 +73,15 @@ def _load_pl(p: str, soc: str) -> pd.DataFrame:
         FROM marts.vw_real_vs_ppto
         WHERE periodo_ref = :p {filtro}
         GROUP BY clasificacion
-    """, {"p": p, "soc": soc})
+    """, params)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def _load_top_desv(p: str, soc: str, n: int = 7) -> pd.DataFrame:
     filtro = "AND v.sociedad = :soc" if soc != "Consolidado" else ""
+    params: dict = {"p": p, "n": n}
+    if soc != "Consolidado":
+        params["soc"] = soc
     return query(f"""
         SELECT COALESCE(d.nombre_cuenta, v.cuenta_codigo) AS cuenta,
                SUM(v.monto_real)  AS real,
@@ -90,7 +96,7 @@ def _load_top_desv(p: str, soc: str, n: int = 7) -> pd.DataFrame:
         HAVING SUM(v.monto_ppto) > 0
         ORDER BY ABS(SUM(v.monto_real) - SUM(v.monto_ppto)) DESC
         LIMIT :n
-    """, {"p": p, "soc": soc, "n": n})
+    """, params)
 
 
 # ── Helpers ─────────────────────────────────────────────────────
