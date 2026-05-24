@@ -27,9 +27,11 @@ header("Gestión de Riesgos y Oportunidades")
 _usuario = st.session_state.get("nombre", "")
 
 # ── Selector de período de referencia ────────────────────────
-meses_lista = [(num, nom) for num, nom in MESES.items() if num <= MES_NUM_ACTUAL]
+# Riesgos son prospectivos: se muestran todos los meses del año,
+# incluyendo futuros (ej. registrar un riesgo para julio desde mayo).
+meses_lista = list(MESES.items())          # 12 meses sin filtro
 meses_nombres = [nom for _, nom in meses_lista]
-mes_default_idx = len(meses_nombres) - 1
+mes_default_idx = MES_NUM_ACTUAL - 1      # posiciona en el mes actual
 
 col_per, col_sp = st.columns([2, 4])
 with col_per:
