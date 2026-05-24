@@ -424,31 +424,36 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
         </div>
         """, unsafe_allow_html=True)
 
-        # Sección VISTA
-        st.markdown("""
-        <div style="font-size:9px; color:rgba(255,255,255,0.3); font-weight:700; letter-spacing:1.5px;
-                    padding:0 4px 4px; text-transform:uppercase;">VISTA</div>
-        """, unsafe_allow_html=True)
+        def _nav_section(label: str, top_pad: bool = False):
+            pad = "10px" if top_pad else "0"
+            st.markdown(f"""
+            <div style="font-size:9px; color:rgba(255,255,255,0.3); font-weight:700;
+                        letter-spacing:1.5px; padding:{pad} 4px 4px;
+                        text-transform:uppercase;">{label}</div>
+            """, unsafe_allow_html=True)
 
-        st.page_link("app.py",                       label="🏠  Inicio",                    use_container_width=True)
-        st.page_link("pages/1_dashboard.py",         label="📊  Resumen Ejecutivo",          use_container_width=True)
-        st.page_link("pages/2_eerr.py",              label="📋  Estado de Resultados",       use_container_width=True)
-        st.page_link("pages/3_centro_costos.py",     label="🏢  Centro de Costos",           use_container_width=True)
-        st.page_link("pages/4_control_cuentas.py",   label="📑  Control Cuentas Contables",  use_container_width=True)
-        st.page_link("pages/6_reportes.py",          label="🤖  Reportes Guardados",         use_container_width=True)
-        st.page_link("pages/8_proyeccion_cierre.py", label="📈  Proyección al Cierre",       use_container_width=True)
-        st.page_link("pages/10_riesgos.py",          label="⚠️  Riesgos y Oportunidades",   use_container_width=True)
-        st.page_link("pages/11_flash_report.py",     label="📄  Flash Report Mensual",       use_container_width=True)
+        # ── REPORTES ─────────────────────────────────────────────
+        _nav_section("Reportes")
+        st.page_link("app.py",                      label="🏠  Inicio",                   use_container_width=True)
+        st.page_link("pages/1_dashboard.py",        label="📊  Resumen Ejecutivo",         use_container_width=True)
+        st.page_link("pages/2_eerr.py",             label="📋  Estado de Resultados",      use_container_width=True)
+        st.page_link("pages/3_centro_costos.py",    label="🏢  Centro de Costos",          use_container_width=True)
+        st.page_link("pages/4_control_cuentas.py",  label="📑  Control Cuentas",           use_container_width=True)
 
+        # ── ANÁLISIS ─────────────────────────────────────────────
+        _nav_section("Análisis", top_pad=True)
+        st.page_link("pages/8_proyeccion_cierre.py", label="📈  Proyección al Cierre",     use_container_width=True)
+        st.page_link("pages/10_riesgos.py",          label="⚠️  Riesgos y Oportunidades", use_container_width=True)
+        st.page_link("pages/11_flash_report.py",     label="📄  Flash Report Mensual",     use_container_width=True)
+        st.page_link("pages/6_reportes.py",          label="🤖  Reportes IA Guardados",    use_container_width=True)
+
+        # ── ADMINISTRACIÓN (solo admin) ───────────────────────────
         rol = st.session_state.get("rol", "")
         if rol == "admin":
-            st.markdown("""
-            <div style="font-size:9px; color:rgba(255,255,255,0.3); font-weight:700; letter-spacing:1.5px;
-                        padding:10px 4px 4px; text-transform:uppercase;">ADMINISTRACIÓN</div>
-            """, unsafe_allow_html=True)
-            st.page_link("pages/5_cargar_datos.py",        label="⬆️  Cargar Datos",          use_container_width=True)
-            st.page_link("pages/9_presupuesto_mensual.py", label="📅  Presupuesto Mensual",    use_container_width=True)
-            st.page_link("pages/7_admin_usuarios.py",      label="👤  Admin Usuarios",         use_container_width=True)
+            _nav_section("Administración", top_pad=True)
+            st.page_link("pages/5_cargar_datos.py",        label="⬆️  Cargar Datos",        use_container_width=True)
+            st.page_link("pages/9_presupuesto_mensual.py", label="📅  Presupuesto Mensual",  use_container_width=True)
+            st.page_link("pages/7_admin_usuarios.py",      label="👤  Admin Usuarios",       use_container_width=True)
 
         st.markdown("<hr style='border:none; border-top:1px solid rgba(255,255,255,0.08); margin:14px 0;'>",
                     unsafe_allow_html=True)
