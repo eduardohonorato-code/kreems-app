@@ -442,7 +442,6 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
 
         # ── ANÁLISIS ─────────────────────────────────────────────
         _nav_section("Análisis", top_pad=True)
-        st.page_link("pages/12_ytd.py",              label="📅  Acumulado YTD",            use_container_width=True)
         st.page_link("pages/8_proyeccion_cierre.py", label="📈  Proyección al Cierre",     use_container_width=True)
         st.page_link("pages/10_riesgos.py",          label="⚠️  Riesgos y Oportunidades", use_container_width=True)
         st.page_link("pages/11_flash_report.py",     label="📄  Flash Report Mensual",     use_container_width=True)
