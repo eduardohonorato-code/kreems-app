@@ -265,12 +265,15 @@ with col_prev:
     sem_g_label = _sem_label(pct_v)
 
     # ── HTML PREVIEW COMPLETO ─────────────────────────────────────
-    html_preview = f"""
-    <div style="font-family:'Inter',sans-serif;border:1px solid #E2E8F0;
-                border-radius:14px;overflow:hidden;
-                box-shadow:0 4px 24px rgba(0,0,0,0.07);max-width:720px;">
+    # Nota: se renderiza con components.html() (iframe) para evitar que
+    # el parser Markdown de Streamlit lo trate como bloque de código.
+    html_preview = f"""<html><head>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>*{{box-sizing:border-box;margin:0;padding:0;font-family:'Inter',sans-serif;}}</style>
+</head><body style="background:transparent;padding:4px;">
+<div style="border:1px solid #E2E8F0;border-radius:14px;overflow:hidden;
+            box-shadow:0 4px 24px rgba(0,0,0,0.07);">
 
-        <!-- Header morado -->
         <div style="background:linear-gradient(135deg,#2d0050,#4a007e);
                     padding:18px 24px;display:flex;justify-content:space-between;align-items:center;">
             <div>
@@ -283,13 +286,11 @@ with col_prev:
             </div>
         </div>
 
-        <!-- KPI Row -->
         <div style="display:flex;gap:10px;padding:16px 20px;background:#F8F9FB;
                     border-bottom:1px solid #E2E8F0;">
             {kpis_html}
         </div>
 
-        <!-- Semáforo global -->
         <div style="padding:8px 20px;background:#fff;border-bottom:1px solid #E2E8F0;
                     display:flex;align-items:center;gap:12px;">
             <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;
@@ -300,10 +301,7 @@ with col_prev:
             </span>
         </div>
 
-        <!-- Body: 2 columnas -->
         <div style="display:grid;grid-template-columns:1fr 1fr;background:#fff;">
-
-            <!-- Top desviaciones -->
             <div style="padding:16px 20px;border-right:1px solid #E2E8F0;">
                 <div style="font-size:10px;font-weight:700;color:#2d0050;text-transform:uppercase;
                             letter-spacing:.8px;margin-bottom:8px;">Top Desviaciones (Costos)</div>
@@ -321,23 +319,22 @@ with col_prev:
                 </table>
             </div>
 
-            <!-- Barras P&L -->
             <div style="padding:16px 20px;">
                 <div style="font-size:10px;font-weight:700;color:#2d0050;text-transform:uppercase;
-                            letter-spacing:.8px;margin-bottom:12px;">Ejecución P&L</div>
+                            letter-spacing:.8px;margin-bottom:12px;">Ejecucion P&L</div>
                 {barras_html}
             </div>
         </div>
 
-        <!-- Footer -->
         <div style="background:#F8F9FB;padding:7px 20px;border-top:1px solid #E2E8F0;">
             <span style="font-size:9px;color:#94A3B8;">
-                Generado automáticamente · Kreems FP&A · {date.today().strftime('%d/%m/%Y %H:%M')}
+                Generado automaticamente · Kreems FP&A · {date.today().strftime('%d/%m/%Y %H:%M')}
             </span>
         </div>
-    </div>
-    """
-    st.markdown(html_preview, unsafe_allow_html=True)
+</div>
+</body></html>"""
+    import streamlit.components.v1 as _components
+    _components.html(html_preview.strip(), height=560, scrolling=False)
 
     # ── Comentario IA (debajo del preview) ──────────────────────
     if analisis_txt:
