@@ -281,81 +281,108 @@ with tab_lista:
         st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
         for _, row in df_fil.iterrows():
-            es_r = row["tipo"] == "RIESGO"
+            rid         = int(row["id"])
+            es_r        = row["tipo"] == "RIESGO"
             color_borde = "#cc0000" if es_r else "#0F6E56"
             color_bg    = "rgba(204,0,0,0.04)" if es_r else "rgba(15,110,86,0.04)"
-            tipo_icon   = "🔴" if es_r else "🟢"
+            tipo_pill   = ("RIESGO" if es_r else "OPRTD.")
+            pill_bg     = "rgba(204,0,0,0.12)" if es_r else "rgba(15,110,86,0.12)"
             monto_txt   = f"${row['impacto_monto']/1_000_000:,.2f}M" if pd.notna(row["impacto_monto"]) else "N/D"
             estado_txt  = ESTADOS_LABEL.get(row["estado"], row["estado"])
             vcto_txt    = pd.Timestamp(row["fecha_vcto"]).strftime("%d/%m/%Y") if pd.notna(row.get("fecha_vcto")) else "—"
+            toggle_key  = f"rio_show_{rid}"
+            if toggle_key not in st.session_state:
+                st.session_state[toggle_key] = False
 
-            with st.expander(f"{tipo_icon}  {row['nombre']}  ·  {row['categoria']}  ·  {estado_txt}", expanded=False):
-                col_info, col_accion = st.columns([3, 1])
-
-                with col_info:
-                    st.markdown(f"""
-                    <div style="background:{color_bg}; border-left:3px solid {color_borde};
-                                border-radius:6px; padding:12px 16px; margin-bottom:8px;">
-                        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:8px;">
-                            <div>
-                                <div style="font-size:10px;color:#aaa;">Probabilidad</div>
-                                <div style="font-size:13px;font-weight:600;color:#333;">{row['probabilidad']}</div>
-                            </div>
-                            <div>
-                                <div style="font-size:10px;color:#aaa;">Impacto</div>
-                                <div style="font-size:13px;font-weight:600;color:#333;">{row['impacto_nivel']}</div>
-                            </div>
-                            <div>
-                                <div style="font-size:10px;color:#aaa;">Monto estimado</div>
-                                <div style="font-size:13px;font-weight:600;color:{color_borde};">{monto_txt}</div>
-                            </div>
-                            <div>
-                                <div style="font-size:10px;color:#aaa;">Responsable</div>
-                                <div style="font-size:13px;color:#333;">{row['responsable'] or '—'}</div>
-                            </div>
-                            <div>
-                                <div style="font-size:10px;color:#aaa;">Vencimiento</div>
-                                <div style="font-size:13px;color:#333;">{vcto_txt}</div>
-                            </div>
-                            <div>
-                                <div style="font-size:10px;color:#aaa;">Creado por</div>
-                                <div style="font-size:13px;color:#333;">{row['creado_por'] or '—'}</div>
-                            </div>
-                        </div>
-                        {f'<div style="font-size:12px;color:#555;margin-top:6px;"><b>Descripción:</b> {row["descripcion"]}</div>' if row.get("descripcion") else ''}
-                        {f'<div style="font-size:12px;color:#555;margin-top:4px;"><b>Plan de acción:</b> {row["plan_accion"]}</div>' if row.get("plan_accion") else ''}
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                with col_accion:
-                    nuevo_estado = st.selectbox(
-                        "Cambiar estado",
-                        ESTADOS,
-                        index=ESTADOS.index(row["estado"]),
-                        key=f"est_{row['id']}",
-                        label_visibility="visible",
+            with st.container(border=True):
+                # ── Encabezado ──
+                col_hdr, col_btn = st.columns([6, 1])
+                with col_hdr:
+                    st.markdown(
+                        f"<div style='display:flex;align-items:center;gap:10px;padding:2px 0;'>"
+                        f"<span style='background:{pill_bg};color:{color_borde};font-size:10px;"
+                        f"font-weight:700;padding:2px 8px;border-radius:4px;letter-spacing:.5px;'>"
+                        f"{tipo_pill}</span>"
+                        f"<span style='font-weight:600;font-size:14px;color:#0F172A;'>{row['nombre']}</span>"
+                        f"<span style='font-size:12px;color:#94A3B8;'>· {row['categoria']} · {estado_txt}</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
                     )
-                    if st.button("💾 Actualizar", key=f"upd_{row['id']}", use_container_width=True):
-                        actualizar_riesgo(int(row["id"]), {
-                            "tipo":          row["tipo"],
-                            "categoria":     row["categoria"],
-                            "nombre":        row["nombre"],
-                            "descripcion":   row["descripcion"],
-                            "probabilidad":  row["probabilidad"],
-                            "impacto_nivel": row["impacto_nivel"],
-                            "impacto_monto": float(row["impacto_monto"]) if pd.notna(row["impacto_monto"]) else None,
-                            "estado":        nuevo_estado,
-                            "responsable":   row["responsable"],
-                            "plan_accion":   row["plan_accion"],
-                            "fecha_vcto":    row["fecha_vcto"],
-                        })
-                        st.success("✓ Estado actualizado")
+                with col_btn:
+                    lbl_toggle = "▲ Cerrar" if st.session_state[toggle_key] else "▼ Ver"
+                    if st.button(lbl_toggle, key=f"tog_{rid}", use_container_width=True):
+                        st.session_state[toggle_key] = not st.session_state[toggle_key]
                         st.rerun()
 
-                    st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
-                    if st.button("🗑 Eliminar", key=f"del_{row['id']}", use_container_width=True):
-                        eliminar_riesgo(int(row["id"]))
-                        st.rerun()
+                # ── Detalle (colapsable) ──
+                if st.session_state[toggle_key]:
+                    col_info, col_accion = st.columns([3, 1])
+
+                    with col_info:
+                        st.markdown(f"""
+                        <div style="background:{color_bg}; border-left:3px solid {color_borde};
+                                    border-radius:6px; padding:12px 16px; margin-top:8px;">
+                            <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:8px;">
+                                <div>
+                                    <div style="font-size:10px;color:#aaa;">Probabilidad</div>
+                                    <div style="font-size:13px;font-weight:600;color:#333;">{row['probabilidad']}</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:10px;color:#aaa;">Impacto</div>
+                                    <div style="font-size:13px;font-weight:600;color:#333;">{row['impacto_nivel']}</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:10px;color:#aaa;">Monto estimado</div>
+                                    <div style="font-size:13px;font-weight:600;color:{color_borde};">{monto_txt}</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:10px;color:#aaa;">Responsable</div>
+                                    <div style="font-size:13px;color:#333;">{row['responsable'] or '—'}</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:10px;color:#aaa;">Vencimiento</div>
+                                    <div style="font-size:13px;color:#333;">{vcto_txt}</div>
+                                </div>
+                                <div>
+                                    <div style="font-size:10px;color:#aaa;">Creado por</div>
+                                    <div style="font-size:13px;color:#333;">{row['creado_por'] or '—'}</div>
+                                </div>
+                            </div>
+                            {f'<div style="font-size:12px;color:#555;margin-top:6px;"><b>Descripción:</b> {row["descripcion"]}</div>' if row.get("descripcion") else ''}
+                            {f'<div style="font-size:12px;color:#555;margin-top:4px;"><b>Plan de acción:</b> {row["plan_accion"]}</div>' if row.get("plan_accion") else ''}
+                        </div>
+                        """, unsafe_allow_html=True)
+
+                    with col_accion:
+                        nuevo_estado = st.selectbox(
+                            "Cambiar estado",
+                            ESTADOS,
+                            index=ESTADOS.index(row["estado"]),
+                            key=f"est_{rid}",
+                        )
+                        if st.button("💾 Actualizar", key=f"upd_{rid}", use_container_width=True):
+                            actualizar_riesgo(rid, {
+                                "tipo":          row["tipo"],
+                                "categoria":     row["categoria"],
+                                "nombre":        row["nombre"],
+                                "descripcion":   row["descripcion"],
+                                "probabilidad":  row["probabilidad"],
+                                "impacto_nivel": row["impacto_nivel"],
+                                "impacto_monto": float(row["impacto_monto"]) if pd.notna(row["impacto_monto"]) else None,
+                                "estado":        nuevo_estado,
+                                "responsable":   row["responsable"],
+                                "plan_accion":   row["plan_accion"],
+                                "fecha_vcto":    row["fecha_vcto"],
+                            })
+                            st.success("✓ Estado actualizado")
+                            st.rerun()
+
+                        st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+                        if st.button("🗑 Eliminar", key=f"del_{rid}", use_container_width=True):
+                            eliminar_riesgo(rid)
+                            st.rerun()
+
+            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
 
 
 # ╔══════════════════════════════════════════╗
