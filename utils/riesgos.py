@@ -4,13 +4,14 @@ CRUD para reports.riesgos_oportunidades
 from __future__ import annotations
 import pandas as pd
 from sqlalchemy import text
-from utils.db import query, get_engine
+from utils.db import query, query_live, get_engine
 
 
 def obtener_riesgos(periodo_ref: str, sociedad: str = "Todas") -> pd.DataFrame:
-    """Retorna todos los registros del período (y sociedad si aplica)."""
+    """Retorna todos los registros del período (y sociedad si aplica).
+    Usa query_live para garantizar datos frescos tras escrituras."""
     filtro = "AND sociedad = :soc" if sociedad != "Todas" else ""
-    return query(f"""
+    return query_live(f"""
         SELECT *
         FROM reports.riesgos_oportunidades
         WHERE periodo_ref = :periodo {filtro}

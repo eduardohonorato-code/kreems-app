@@ -243,18 +243,21 @@ with tab_hm:
             st.markdown("**Por categoría**")
             cat_counts = df_abiertos.groupby(["categoria","tipo"]).size().unstack(fill_value=0)
             for cat in cat_counts.index:
-                n_r = cat_counts.loc[cat, "RIESGO"] if "RIESGO" in cat_counts.columns else 0
-                n_o = cat_counts.loc[cat, "OPORTUNIDAD"] if "OPORTUNIDAD" in cat_counts.columns else 0
-                st.markdown(f"""
-                <div style="display:flex;justify-content:space-between;padding:4px 0;
-                            font-size:12px;border-bottom:0.5px solid #f0f0f0;">
-                    <span style="color:#555;">{cat.capitalize()}</span>
-                    <span>
-                        {'<span style="color:#cc0000;font-weight:600;">'+str(n_r)+'R</span> ' if n_r else ''}
-                        {'<span style="color:#0F6E56;font-weight:600;">'+str(n_o)+'O</span>' if n_o else ''}
-                    </span>
-                </div>
-                """, unsafe_allow_html=True)
+                n_r = int(cat_counts.loc[cat, "RIESGO"]) if "RIESGO" in cat_counts.columns else 0
+                n_o = int(cat_counts.loc[cat, "OPORTUNIDAD"]) if "OPORTUNIDAD" in cat_counts.columns else 0
+                badges = ""
+                if n_r:
+                    badges += f'<span style="color:#cc0000;font-weight:600;margin-right:4px;">{n_r}R</span>'
+                if n_o:
+                    badges += f'<span style="color:#0F6E56;font-weight:600;">{n_o}O</span>'
+                st.markdown(
+                    f'<div style="display:flex;justify-content:space-between;padding:4px 0;'
+                    f'font-size:12px;border-bottom:0.5px solid #f0f0f0;">'
+                    f'<span style="color:#555;">{cat.capitalize()}</span>'
+                    f'<div style="display:flex;gap:2px;">{badges}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
 
 
 # ╔══════════════════════════════════════════╗
