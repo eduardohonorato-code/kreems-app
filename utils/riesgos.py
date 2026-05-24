@@ -4,19 +4,24 @@ CRUD para reports.riesgos_oportunidades
 from __future__ import annotations
 import pandas as pd
 from sqlalchemy import text
-from utils.db import query, query_live, get_engine
+from utils.db import query, get_engine
 
 
 def obtener_riesgos(periodo_ref: str, sociedad: str = "Todas") -> pd.DataFrame:
-    """Retorna todos los registros del período (y sociedad si aplica).
-    Usa query_live para garantizar datos frescos tras escrituras."""
-    filtro = "AND sociedad = :soc" if sociedad != "Todas" else ""
-    return query_live(f"""
+    """Retorna todos los registros del período (y sociedad si aplica)."""
+    if sociedad != "Todas":
+        return query("""
+            SELECT *
+            FROM reports.riesgos_oportunidades
+            WHERE periodo_ref = :periodo AND sociedad = :soc
+            ORDER BY tipo, probabilidad DESC, impacto_nivel DESC
+        """, {"periodo": periodo_ref, "soc": sociedad})
+    return query("""
         SELECT *
         FROM reports.riesgos_oportunidades
-        WHERE periodo_ref = :periodo {filtro}
+        WHERE periodo_ref = :periodo
         ORDER BY tipo, probabilidad DESC, impacto_nivel DESC
-    """, {"periodo": periodo_ref, "soc": sociedad})
+    """, {"periodo": periodo_ref})
 
 
 def guardar_riesgo(data: dict) -> int:
@@ -33,11 +38,13 @@ def guardar_riesgo(data: dict) -> int:
                  :responsable, :plan_accion, :fecha_vcto, :creado_por)
             RETURNING id
         """), data)
-        return result.fetchone()[0]
+        nuevo_id = result.fetchone()[0]
+    query.clear()   # invalida caché para que el rerun lea datos frescos
+    return nuevo_id
 
 
 def actualizar_riesgo(riesgo_id: int, data: dict):
-    """Actualiza un registro existente."""
+    """Actualiza un registro existente y limpia caché."""
     data["id"] = riesgo_id
     with get_engine().begin() as conn:
         conn.execute(text("""
@@ -55,14 +62,17 @@ def actualizar_riesgo(riesgo_id: int, data: dict):
                 fecha_vcto     = :fecha_vcto
             WHERE id = :id
         """), data)
+    query.clear()   # invalida caché para que el rerun lea datos frescos
 
 
 def eliminar_riesgo(riesgo_id: int):
+    """Elimina un registro y limpia caché."""
     with get_engine().begin() as conn:
         conn.execute(
             text("DELETE FROM reports.riesgos_oportunidades WHERE id = :id"),
             {"id": riesgo_id},
         )
+    query.clear()   # invalida caché para que el rerun lea datos frescos
 
 
 # ── helpers de codificación ────────────────────────────────────
