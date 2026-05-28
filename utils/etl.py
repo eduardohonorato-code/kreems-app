@@ -169,10 +169,12 @@ def run_etl_acuna(file_bytes: bytes) -> dict:
 
         # Cargar a BD
         with engine.begin() as conn:
-            r = conn.execute(text(
-                "DELETE FROM marts.fact_real WHERE periodo = :p AND sociedad = 'ACUÑA'"
-            ), {"p": periodo})
-            _log(logs, f"Registros anteriores eliminados: {r.rowcount}")
+            # Excluir fuente='CV_MANUAL' para preservar el costo variable ingresado manualmente
+            r = conn.execute(text("""
+                DELETE FROM marts.fact_real
+                WHERE periodo = :p AND sociedad = 'ACUÑA' AND fuente <> 'CV_MANUAL'
+            """), {"p": periodo})
+            _log(logs, f"Registros anteriores eliminados: {r.rowcount} (CV Manual preservado)")
 
             df.to_sql("fact_real", con=conn, schema="marts", if_exists="append", index=False)
 
@@ -267,10 +269,12 @@ def run_etl_gn(file_bytes: bytes) -> dict:
             _log(logs, f"  {cc}: ${val:,.0f}")
 
         with engine.begin() as conn:
-            r = conn.execute(text(
-                "DELETE FROM marts.fact_real WHERE periodo = :p AND sociedad = 'GRAN_NATURAL'"
-            ), {"p": periodo})
-            _log(logs, f"Registros anteriores eliminados: {r.rowcount}")
+            # Excluir fuente='CV_MANUAL' para preservar el costo variable ingresado manualmente
+            r = conn.execute(text("""
+                DELETE FROM marts.fact_real
+                WHERE periodo = :p AND sociedad = 'GRAN_NATURAL' AND fuente <> 'CV_MANUAL'
+            """), {"p": periodo})
+            _log(logs, f"Registros anteriores eliminados: {r.rowcount} (CV Manual preservado)")
 
             df_final.to_sql("fact_real", con=conn, schema="marts", if_exists="append", index=False)
 
