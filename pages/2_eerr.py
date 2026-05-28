@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import pandas as pd
 import json
 from datetime import date
-from utils.auth import login, get_cc_sql_filter
+from utils.auth import login, get_cc_sql_filter, requiere_acceso_total
 from utils.db import query
 from utils.components import (
     header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill,
@@ -21,6 +21,7 @@ st.set_page_config(page_title="Estado de Resultados · Kreems", page_icon="💜"
 
 if not login():
     st.stop()
+requiere_acceso_total()
 
 sociedad_sel, _ = sidebar_kreems(mostrar_sociedad=True)
 header(f"Estado de Resultados — Real vs Presupuesto {_ANO}")

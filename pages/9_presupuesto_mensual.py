@@ -5,7 +5,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 from sqlalchemy import text
-from utils.auth import login, get_cc_filter
+from utils.auth import login, get_cc_filter, requiere_acceso_total
 from utils.db import query, get_engine
 from utils.components import header, sidebar_kreems, boton_excel, ANO_FISCAL
 
@@ -13,6 +13,7 @@ st.set_page_config(page_title="Presupuesto Mensual · Kreems", page_icon="💜",
 
 if not login():
     st.stop()
+requiere_acceso_total()
 
 sociedad_sel, _ = sidebar_kreems(mostrar_sociedad=False)
 header("Presupuesto Mensualizado")

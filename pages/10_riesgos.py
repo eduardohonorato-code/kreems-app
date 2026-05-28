@@ -5,7 +5,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import date
-from utils.auth import login
+from utils.auth import login, requiere_acceso_total
 from utils.components import header, sidebar_kreems, ANO_FISCAL, MESES, MES_NUM_ACTUAL
 from utils.ai import generar_analisis_riesgos
 from utils.riesgos import (
@@ -21,6 +21,7 @@ st.set_page_config(
 
 if not login():
     st.stop()
+requiere_acceso_total()
 
 sociedad_sel, _ = sidebar_kreems(mostrar_sociedad=True)
 header("Gestión de Riesgos y Oportunidades")
@@ -442,7 +443,7 @@ with tab_ia:
     # ── Botón generar ────────────────────────────────────────────
     cache_key = f"rio_ia_{periodo_ref}_{filtro_soc}"
 
-    col_btn_ia, col_info_ia = st.columns([2, 4])
+    col_btn_ia, col_cerrar_ia, col_info_ia = st.columns([2, 1, 3])
     with col_btn_ia:
         btn_ia = st.button(
             "🤖 Generar análisis FP&A",
@@ -450,6 +451,11 @@ with tab_ia:
             type="primary",
             disabled=df_abiertos.empty,
         )
+    with col_cerrar_ia:
+        hay_analisis = bool(st.session_state.get(cache_key, ""))
+        if st.button("✕ Cerrar", use_container_width=True, disabled=not hay_analisis):
+            st.session_state.pop(cache_key, None)
+            st.rerun()
     with col_info_ia:
         if df_abiertos.empty:
             st.warning("No hay riesgos u oportunidades activos para el período seleccionado.")

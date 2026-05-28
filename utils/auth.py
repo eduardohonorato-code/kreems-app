@@ -110,6 +110,13 @@ def get_cc_filter() -> list | None:
     return st.session_state.get("cc_permitidos", None)
 
 
+def requiere_acceso_total():
+    """Bloquea la página si el usuario tiene restricción de CC."""
+    if st.session_state.get("cc_permitidos") is not None:
+        st.error("🔒 No tienes acceso a esta sección.")
+        st.stop()
+
+
 def get_cc_sql_filter() -> str:
     """Fragmento SQL para filtrar por CCs permitidos.
     Retorna '' si el usuario tiene acceso a todos los CCs.

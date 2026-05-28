@@ -3,7 +3,7 @@ Kreems FP&A — Inicio
 """
 import streamlit as st
 from datetime import date
-from utils.auth import login
+from utils.auth import login, get_cc_filter
 from utils.components import header, sidebar_kreems
 
 _ANO = date.today().year
@@ -33,13 +33,11 @@ st.markdown(f"""
 </p>
 """, unsafe_allow_html=True)
 
-cards = [
+# Páginas disponibles para todos los usuarios
+_cards_base = [
     ("📊", "Resumen Ejecutivo",
      "Ventas reales vs presupuesto, gauge de cumplimiento y ejecución por CC.",
      "pages/1_dashboard.py"),
-    ("📋", "Estado de Resultados",
-     "P&L completo: Ventas, Costo Variable, Costo Fijo, OPEX, EBIT y Utilidad Neta.",
-     "pages/2_eerr.py"),
     ("🏢", "Centro de Costos",
      "Tarjetas por centro de costo y gráfico de ejecución real vs presupuesto.",
      "pages/3_centro_costos.py"),
@@ -47,8 +45,15 @@ cards = [
      "Detalle por cuenta con alertas, KPIs de ejecución y filtros por CC y clasificación.",
      "pages/4_control_cuentas.py"),
     ("🤖", "Reportes Guardados",
-     "Análisis IA guardados del Estado de Resultados. Revisa y compara períodos.",
+     "Análisis IA guardados. Revisa reportes generados para tu centro de costo.",
      "pages/6_reportes.py"),
+]
+
+# Páginas solo para usuarios sin restricción de CC (acceso total)
+_cards_full = [
+    ("📋", "Estado de Resultados",
+     "P&L completo: Ventas, Costo Variable, Costo Fijo, OPEX, EBIT y Utilidad Neta.",
+     "pages/2_eerr.py"),
     ("📈", "Proyección al Cierre",
      "Forecast del año completo con tres métodos: tendencia, estacionalidad y manual.",
      "pages/8_proyeccion_cierre.py"),
@@ -62,6 +67,12 @@ cards = [
      "Resumen ejecutivo de 1 página con KPIs, semáforo, top desviaciones y comentario IA. Descargable en PDF.",
      "pages/11_flash_report.py"),
 ]
+
+# Construir lista según permisos del usuario
+_cc_restringido = get_cc_filter() is not None
+cards = list(_cards_base)
+if not _cc_restringido:
+    cards += _cards_full
 
 # Tarjeta de admin solo visible para admins
 if st.session_state.get("rol") == "admin":

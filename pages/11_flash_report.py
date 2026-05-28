@@ -7,7 +7,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 
-from utils.auth import login, get_cc_sql_filter
+from utils.auth import login, get_cc_sql_filter, requiere_acceso_total
 from utils.components import header, sidebar_kreems, inject_font
 from utils.db import query
 from utils.ai import generar_analisis_flash
@@ -22,6 +22,7 @@ st.set_page_config(
 
 if not login():
     st.stop()
+requiere_acceso_total()
 
 inject_font()
 sidebar_kreems(mostrar_sociedad=False)

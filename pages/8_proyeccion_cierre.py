@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import date
-from utils.auth import login, get_cc_sql_filter
+from utils.auth import login, get_cc_sql_filter, requiere_acceso_total
 from utils.db import query
 from utils.components import header, sidebar_kreems, fmt_mill, boton_excel
 
@@ -17,6 +17,7 @@ st.set_page_config(page_title="Proyección al Cierre · Kreems", page_icon="💜
 
 if not login():
     st.stop()
+requiere_acceso_total()
 
 sociedad_sel, _ = sidebar_kreems(mostrar_sociedad=True, mostrar_cc=False)
 header("Proyección al Cierre")
