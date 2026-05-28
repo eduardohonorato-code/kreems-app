@@ -114,6 +114,7 @@ def requiere_acceso_total():
     """Bloquea la página si el usuario tiene restricción de CC."""
     if st.session_state.get("cc_permitidos") is not None:
         st.error("🔒 No tienes acceso a esta sección.")
+        st.page_link("app.py", label="← Volver al Inicio", icon="🏠")
         st.stop()
 
 
