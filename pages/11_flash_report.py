@@ -7,7 +7,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 
-from utils.auth import login
+from utils.auth import login, get_cc_sql_filter
 from utils.components import header, sidebar_kreems, inject_font
 from utils.db import query
 from utils.ai import generar_analisis_flash
@@ -63,12 +63,13 @@ with c3:
 def _load_pl(p: str, soc: str) -> pd.DataFrame:
     """Mismo patrón que EERR: valor_real/valor_ppto, filtro_soc como f-string."""
     filtro_soc = f"AND sociedad = '{soc}'" if soc != "Todas" else ""
+    filtro_cc  = get_cc_sql_filter()
     return query(f"""
         SELECT clasificacion,
                SUM(valor_real) AS monto_r,
                SUM(valor_ppto) AS monto_p
         FROM marts.vw_real_vs_ppto
-        WHERE periodo = :p {filtro_soc}
+        WHERE periodo = :p {filtro_soc} {filtro_cc}
         GROUP BY clasificacion
     """, {"p": p})
 
@@ -76,6 +77,7 @@ def _load_pl(p: str, soc: str) -> pd.DataFrame:
 def _load_top_desv(p: str, soc: str, n: int = 7) -> pd.DataFrame:
     """Top N cuentas por desviación absoluta. nombre_cuenta ya está en la vista."""
     filtro_soc = f"AND sociedad = '{soc}'" if soc != "Todas" else ""
+    filtro_cc  = get_cc_sql_filter()
     return query(f"""
         SELECT nombre_cuenta AS cuenta,
                SUM(valor_real)  AS monto_r,
@@ -85,6 +87,7 @@ def _load_top_desv(p: str, soc: str, n: int = 7) -> pd.DataFrame:
         WHERE periodo = :p
           AND clasificacion NOT IN ('INGRESO')
           {filtro_soc}
+          {filtro_cc}
         GROUP BY nombre_cuenta
         HAVING SUM(valor_ppto) > 0
         ORDER BY ABS(SUM(valor_real) - SUM(valor_ppto)) DESC

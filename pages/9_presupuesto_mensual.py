@@ -5,7 +5,7 @@ import streamlit as st
 import pandas as pd
 from datetime import date
 from sqlalchemy import text
-from utils.auth import login
+from utils.auth import login, get_cc_filter
 from utils.db import query, get_engine
 from utils.components import header, sidebar_kreems, boton_excel, ANO_FISCAL
 
@@ -20,12 +20,15 @@ header("Presupuesto Mensualizado")
 _ANO = ANO_FISCAL
 es_admin = st.session_state.get("rol") == "admin"
 
-NOMBRES_CC = {
+_TODOS_CC = {
     "CC-01": "Administración",
     "CC-02": "Comercial",
     "CC-03": "Distribución",
     "CC-04": "Producción",
 }
+_cc_permitidos = get_cc_filter()
+NOMBRES_CC = {k: v for k, v in _TODOS_CC.items()
+              if _cc_permitidos is None or k in _cc_permitidos}
 MESES_COLS = {
     f"{_ANO}-{m:02d}": nom for m, nom in [
         (1,"Ene"),(2,"Feb"),(3,"Mar"),(4,"Abr"),(5,"May"),(6,"Jun"),
@@ -49,8 +52,13 @@ st.markdown(f"""
 
 # ── QUERY: presupuesto mensual por cuenta y CC ────────────────
 @st.cache_data(ttl=120)
-def cargar_presupuesto(ano: int):
-    return query("""
+def cargar_presupuesto(ano: int, cc_permitidos: tuple | None):
+    filtro_cc = (
+        "AND fp.codigo_cc IN ({})".format(
+            ", ".join(f"'{cc}'" for cc in cc_permitidos)
+        ) if cc_permitidos else ""
+    )
+    return query(f"""
         SELECT
             fp.codigo_cc,
             dc.clasificacion,
@@ -61,11 +69,12 @@ def cargar_presupuesto(ano: int):
         JOIN master.dim_cuentas dc ON dc.codigo_cuenta = fp.codigo_cuenta
         WHERE fp.periodo LIKE :anio
           AND fp.codigo_cc <> 'CC-00'
+          {filtro_cc}
         GROUP BY fp.codigo_cc, dc.clasificacion, dc.nombre_cuenta, fp.periodo
         ORDER BY fp.codigo_cc, dc.clasificacion, dc.nombre_cuenta, fp.periodo
     """, {"anio": f"{ano}-%"})
 
-df_ppto = cargar_presupuesto(_ANO)
+df_ppto = cargar_presupuesto(_ANO, tuple(_cc_permitidos) if _cc_permitidos else None)
 
 if df_ppto.empty:
     st.info("No hay datos de presupuesto cargados para este año.")

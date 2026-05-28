@@ -5,7 +5,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 from datetime import date
-from utils.auth import login
+from utils.auth import login, get_cc_sql_filter
 from utils.db import query
 from utils.components import (
     header, selector_meses, kpi_card, sidebar_kreems,
@@ -36,6 +36,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ── FILTROS SQL ───────────────────────────────────────────────
 filtro_soc = f"AND sociedad = '{sociedad_sel}'" if sociedad_sel != "Todas" else ""
+filtro_cc  = get_cc_sql_filter()
 
 # ── DATOS: Ventas totales periodo seleccionado ────────────────
 df_ventas = query(f"""
@@ -73,6 +74,7 @@ df_cc = query(f"""
       AND codigo_cc NOT IN ('CC-00')
       AND clasificacion <> 'INGRESO'
       {filtro_soc}
+      {filtro_cc}
     GROUP BY nombre_cc, codigo_cc
     ORDER BY codigo_cc
 """, {"desde": periodo_desde, "hasta": periodo_hasta})

@@ -5,7 +5,7 @@ import streamlit as st
 import pandas as pd
 import json
 import plotly.graph_objects as go
-from utils.auth import login
+from utils.auth import login, get_cc_filter, get_cc_sql_filter
 from utils.db import query
 from utils.components import (
     header, selector_meses, sidebar_kreems, fmt_mill, cc_card, boton_excel,
@@ -25,15 +25,20 @@ periodo_desde, periodo_hasta = selector_meses(key="cc")
 st.markdown("<br>", unsafe_allow_html=True)
 
 filtro_soc = f"AND sociedad = '{sociedad_sel}'" if sociedad_sel != "Todas" else ""
+filtro_cc  = get_cc_sql_filter()
 COLOR_GOOD = "#0F6E56"
 COLOR_BAD  = "#cc0000"
 
-NOMBRES_CC = {
+_TODOS_CC = {
     "CC-01": "Administración",
     "CC-02": "Comercial",
     "CC-03": "Distribución",
     "CC-04": "Producción",
 }
+# Restringir tarjetas al CC permitido del usuario
+_cc_permitidos = get_cc_filter()
+NOMBRES_CC = {k: v for k, v in _TODOS_CC.items()
+              if _cc_permitidos is None or k in _cc_permitidos}
 
 df_cc = query(f"""
     SELECT
@@ -46,6 +51,7 @@ df_cc = query(f"""
       AND codigo_cc <> 'CC-00'
       AND clasificacion <> 'INGRESO'
       {filtro_soc}
+      {filtro_cc}
     GROUP BY codigo_cc, nombre_cc
     ORDER BY codigo_cc
 """, {"desde": periodo_desde, "hasta": periodo_hasta})

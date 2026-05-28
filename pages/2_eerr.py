@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import pandas as pd
 import json
 from datetime import date
-from utils.auth import login
+from utils.auth import login, get_cc_sql_filter
 from utils.db import query
 from utils.components import (
     header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill,
@@ -28,6 +28,7 @@ periodo_desde, periodo_hasta = selector_meses(key="eerr")
 st.markdown("<br>", unsafe_allow_html=True)
 
 filtro_soc = f"AND sociedad = '{sociedad_sel}'" if sociedad_sel != "Todas" else ""
+filtro_cc  = get_cc_sql_filter()
 
 # ── DATOS RAW ────────────────────────────────────────────────
 df_raw = query(f"""
@@ -36,7 +37,7 @@ df_raw = query(f"""
         SUM(valor_real) AS real,
         SUM(valor_ppto) AS ppto
     FROM marts.vw_real_vs_ppto
-    WHERE periodo BETWEEN :desde AND :hasta {filtro_soc}
+    WHERE periodo BETWEEN :desde AND :hasta {filtro_soc} {filtro_cc}
     GROUP BY clasificacion
 """, {"desde": periodo_desde, "hasta": periodo_hasta})
 

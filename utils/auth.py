@@ -108,3 +108,15 @@ def requiere_admin():
 def get_cc_filter() -> list | None:
     """Retorna la lista de CCs permitidos para el usuario actual. None = todos."""
     return st.session_state.get("cc_permitidos", None)
+
+
+def get_cc_sql_filter() -> str:
+    """Fragmento SQL para filtrar por CCs permitidos.
+    Retorna '' si el usuario tiene acceso a todos los CCs.
+    Retorna 'AND codigo_cc IN (...)'  si tiene restricción.
+    """
+    cc_list = st.session_state.get("cc_permitidos", None)
+    if not cc_list:
+        return ""
+    in_clause = ", ".join(f"'{cc}'" for cc in cc_list)
+    return f"AND codigo_cc IN ({in_clause})"

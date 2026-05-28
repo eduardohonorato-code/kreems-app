@@ -9,7 +9,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import date
-from utils.auth import login
+from utils.auth import login, get_cc_sql_filter
 from utils.db import query
 from utils.components import header, sidebar_kreems, fmt_mill, boton_excel
 
@@ -32,6 +32,7 @@ NOMBRES_MESES = {
 }
 
 filtro_soc = f"AND sociedad = '{sociedad_sel}'" if sociedad_sel != "Todas" else ""
+filtro_cc  = get_cc_sql_filter()
 
 st.markdown(f"""
 <p style="color:#888; font-size:13px; margin-bottom:20px;">
@@ -51,6 +52,7 @@ df_mensual = query(f"""
     FROM marts.vw_real_vs_ppto
     WHERE periodo BETWEEN :desde AND :hasta
       {filtro_soc}
+      {filtro_cc}
     GROUP BY periodo, clasificacion
     ORDER BY periodo, clasificacion
 """, {"desde": f"{_ANO}-01", "hasta": f"{_ANO}-12"})
