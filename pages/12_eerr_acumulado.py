@@ -13,7 +13,7 @@ from utils.components import (
     header, sidebar_kreems, fmt_mill, boton_excel,
     get_soc_sql_filter, MESES, MES_NUM_ACTUAL,
 )
-from utils.ai import generar_analisis_eerr
+from utils.ai import generar_analisis_eerr_acumulado
 
 _ANO = date.today().year
 
@@ -231,7 +231,7 @@ st.markdown("##### Análisis IA")
 if "acum_analisis_texto" not in st.session_state:
     st.session_state["acum_analisis_texto"] = ""
 
-# Datos para la IA: usa los acumulados YTD (Real vs Ppto)
+# Datos para la IA: acumulados YTD (Real vs Ppto) + trayectoria mes a mes
 _datos_ia = {
     "ventas_r": ventas_r, "ventas_p": ventas_p,
     "cv_r": cum_real["COSTO_VAR"][_i],   "cv_p": cum_ppto["COSTO_VAR"][_i],
@@ -245,13 +245,29 @@ _datos_ia = {
     "periodo_desde": periodo_desde,
     "periodo_hasta": periodo_hasta,
     "sociedad": sociedad_sel,
+    # Contexto acumulado específico de esta página
+    "n_meses":   len(_MESES_NUM),
+    "mes_hasta": mes_hasta_nom,
+    "meses":     _COL_LABELS,
+    "serie": {
+        "ventas": cum_real["INGRESO"],
+        "ub":     der_real["UB"],
+        "ebit":   der_real["EBIT"],
+        "un":     der_real["UN"],
+    },
+    "serie_ppto": {
+        "ventas": cum_ppto["INGRESO"],
+        "ub":     der_ppto["UB"],
+        "ebit":   der_ppto["EBIT"],
+        "un":     der_ppto["UN"],
+    },
 }
 
 col_ia, col_cerrar, _ = st.columns([2, 1, 2])
 with col_ia:
     if st.button("Generar Análisis con IA", type="primary", use_container_width=True, key="btn_ia_acum"):
         with st.spinner("Analizando datos acumulados con IA..."):
-            st.session_state["acum_analisis_texto"] = generar_analisis_eerr(_datos_ia)
+            st.session_state["acum_analisis_texto"] = generar_analisis_eerr_acumulado(_datos_ia)
             st.session_state["acum_analisis_datos"] = _datos_ia
 
 if st.session_state["acum_analisis_texto"]:

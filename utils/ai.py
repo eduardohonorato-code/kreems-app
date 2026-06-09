@@ -125,6 +125,165 @@ Sé directo. Usa valores en millones con símbolo $M. No repitas datos de la tab
         return f"❌ Error al generar análisis: {e}"
 
 
+def generar_analisis_eerr_acumulado(datos: dict) -> str:
+    """
+    Análisis del Estado de Resultados ACUMULADO (YTD) con persona de Director
+    Financiero (CFO). A diferencia de generar_analisis_eerr, aprovecha la
+    progresión mes a mes para evaluar tendencia, run-rate y trayectoria al cierre.
+
+    datos debe contener (además de los campos del EERR estándar):
+        ventas_r/p, cv_r/p, cf_r/p, opex_r/p, fin_r/p, nooper_r/p,
+        ub_r/p, ebit_r/p, un_r/p, periodo_desde, periodo_hasta, sociedad,
+        n_meses (int), mes_hasta (str),
+        serie       = {"ventas":[...], "ub":[...], "ebit":[...], "un":[...]}  # REAL acumulado por mes
+        serie_ppto  = {"ventas":[...], "ub":[...], "ebit":[...], "un":[...]}  # PPTO acumulado por mes
+        meses       = ["Ene","Feb",...]  # etiquetas de cada columna
+    """
+    client = _get_client()
+    if client is None:
+        return (
+            "⚠ **API key no configurada.**\n\n"
+            "Agrega en `.streamlit/secrets.toml`:\n"
+            "```toml\n[groq]\napi_key = \"gsk_...\"\n```\n\n"
+            "Obtén tu key gratis en https://console.groq.com"
+        )
+
+    ventas_r = datos["ventas_r"]; ventas_p = datos["ventas_p"]
+    cv_r     = datos["cv_r"];     cv_p     = datos["cv_p"]
+    cf_r     = datos["cf_r"];     cf_p     = datos["cf_p"]
+    opex_r   = datos["opex_r"];   opex_p   = datos["opex_p"]
+    fin_r    = datos["fin_r"];    fin_p    = datos["fin_p"]
+    nooper_r = datos["nooper_r"]; nooper_p = datos["nooper_p"]
+    ub_r     = datos["ub_r"];     ub_p     = datos["ub_p"]
+    ebit_r   = datos["ebit_r"];   ebit_p   = datos["ebit_p"]
+    un_r     = datos["un_r"];     un_p     = datos["un_p"]
+
+    mb_r    = (ub_r   / ventas_r * 100) if ventas_r else 0
+    mb_p    = (ub_p   / ventas_p * 100) if ventas_p else 0
+    mebit_r = (ebit_r / ventas_r * 100) if ventas_r else 0
+    mebit_p = (ebit_p / ventas_p * 100) if ventas_p else 0
+    mnet_r  = (un_r   / ventas_r * 100) if ventas_r else 0
+    mnet_p  = (un_p   / ventas_p * 100) if ventas_p else 0
+
+    sociedad = datos.get("sociedad", "Consolidado")
+    n_meses  = datos.get("n_meses", 0) or 0
+    mes_hasta = datos.get("mes_hasta", "")
+    meses    = datos.get("meses", []) or []
+    serie    = datos.get("serie", {}) or {}
+    serie_p  = datos.get("serie_ppto", {}) or {}
+
+    # ── Run-rate y proyección lineal implícita al cierre ──
+    run_rate_ventas = ventas_r / n_meses if n_meses else 0
+    run_rate_un     = un_r / n_meses if n_meses else 0
+    proj_ventas_cierre = run_rate_ventas * 12
+    proj_un_cierre     = run_rate_un * 12
+
+    # ── Tabla de trayectoria acumulada (Real) ──
+    def _fila_serie(nombre, key):
+        vals = serie.get(key, [])
+        if not vals:
+            return f"| {nombre} | (sin datos) |"
+        celdas = " | ".join(_fmt_m(v) for v in vals)
+        return f"| {nombre} | {celdas} |"
+
+    encabezado_meses = " | ".join(meses) if meses else ""
+    tabla_tray = "\n".join([
+        f"| Línea (acum.) | {encabezado_meses} |",
+        "|" + "---|" * (len(meses) + 1),
+        _fila_serie("Ventas",        "ventas"),
+        _fila_serie("Utilidad Bruta", "ub"),
+        _fila_serie("EBIT",          "ebit"),
+        _fila_serie("Utilidad Neta", "un"),
+    ])
+
+    # ── Último incremento mensual (run-rate del mes más reciente) ──
+    def _delta_ultimo(key):
+        vals = serie.get(key, [])
+        if len(vals) >= 2:
+            return vals[-1] - vals[-2]
+        elif len(vals) == 1:
+            return vals[0]
+        return 0
+    inc_ventas = _delta_ultimo("ventas")
+    inc_un     = _delta_ultimo("un")
+
+    periodo = f"{datos['periodo_desde']} a {datos['periodo_hasta']}"
+
+    prompt = f"""Eres el Director Financiero (CFO) de una empresa chilena, con 20 años de experiencia en FP&A.
+Analizas el ESTADO DE RESULTADOS ACUMULADO (YTD) y su PROGRESIÓN mes a mes para entregar a la Gerencia General
+un análisis de alto nivel, cuantitativo y orientado a la toma de decisiones. No describas la tabla: interprétala.
+
+REGLAS DE INTERPRETACIÓN (aplícalas siempre):
+- VENTAS: ejecución >100% del presupuesto acumulado = POSITIVO. <100% = NEGATIVO.
+- COSTOS (Costo Variable, Costo Fijo, OPEX, Financieros, No Operacionales): >100% = NEGATIVO (gasto sobre lo planeado); <100% = POSITIVO (ahorro).
+- MÁRGENES y UTILIDADES (Ut. Bruta, EBIT, Ut. Neta): >100% = POSITIVO; <100% = NEGATIVO.
+- La clave del análisis acumulado es la TENDENCIA: ¿la brecha vs presupuesto se amplía o se cierra mes a mes? ¿el margen se expande o se erosiona? ¿el run-rate alcanza para cumplir el año?
+
+EMPRESA: {sociedad}
+PERÍODO ACUMULADO: {periodo}  ({n_meses} meses cerrados, Enero–{mes_hasta})
+
+RESULTADO ACUMULADO YTD (Real vs Presupuesto):
+| Línea            | Real YTD          | Ppto YTD          | % Ejec. |
+|------------------|-------------------|-------------------|---------|
+| Ventas           | {_fmt_m(ventas_r)} | {_fmt_m(ventas_p)} | {_pct(ventas_r, ventas_p)} |
+| Costo Variable   | {_fmt_m(cv_r)}    | {_fmt_m(cv_p)}    | {_pct(cv_r, cv_p)} |
+| Utilidad Bruta   | {_fmt_m(ub_r)}    | {_fmt_m(ub_p)}    | {_pct(ub_r, ub_p)} |
+| Margen Bruto     | {mb_r:.1f}%       | {mb_p:.1f}%       | {mb_r - mb_p:+.1f}pp |
+| Costo Fijo       | {_fmt_m(cf_r)}    | {_fmt_m(cf_p)}    | {_pct(cf_r, cf_p)} |
+| OPEX             | {_fmt_m(opex_r)}  | {_fmt_m(opex_p)}  | {_pct(opex_r, opex_p)} |
+| EBIT             | {_fmt_m(ebit_r)}  | {_fmt_m(ebit_p)}  | {_pct(ebit_r, ebit_p)} |
+| Margen EBIT      | {mebit_r:.1f}%    | {mebit_p:.1f}%    | {mebit_r - mebit_p:+.1f}pp |
+| G. Financieros   | {_fmt_m(fin_r)}   | {_fmt_m(fin_p)}   | {_pct(fin_r, fin_p)} |
+| G. No Operac.    | {_fmt_m(nooper_r)} | {_fmt_m(nooper_p)} | {_pct(nooper_r, nooper_p)} |
+| Utilidad Neta    | {_fmt_m(un_r)}    | {_fmt_m(un_p)}    | {_pct(un_r, un_p)} |
+| Margen Neto      | {mnet_r:.1f}%     | {mnet_p:.1f}%     | {mnet_r - mnet_p:+.1f}pp |
+
+TRAYECTORIA ACUMULADA REAL (cada celda es el acumulado desde Enero hasta ese mes):
+{tabla_tray}
+
+SEÑALES DE RITMO:
+- Incremento del último mes ({mes_hasta}): Ventas {_fmt_m(inc_ventas)} · Utilidad Neta {_fmt_m(inc_un)}
+- Run-rate mensual promedio: Ventas {_fmt_m(run_rate_ventas)} · Ut. Neta {_fmt_m(run_rate_un)}
+- Proyección lineal simple al cierre (run-rate × 12): Ventas {_fmt_m(proj_ventas_cierre)} · Ut. Neta {_fmt_m(proj_un_cierre)}
+
+Estructura tu respuesta EXACTAMENTE así (en español, sin markdown extra ni asteriscos):
+
+DIAGNÓSTICO EJECUTIVO
+(2-3 oraciones de CFO: ¿cómo cerró el acumulado a {mes_hasta} vs el plan y qué historia cuenta la utilidad?)
+
+TENDENCIA Y TRAYECTORIA
+(Interpreta la progresión mes a mes: ¿la brecha vs presupuesto se amplía o se cierra? ¿el margen se expande o se erosiona? ¿hay aceleración o desaceleración en el último mes? Usa cifras concretas de la trayectoria.)
+
+DRIVERS DE LA VARIACIÓN
+1. (Línea que más explica la desviación de la Utilidad Neta vs ppto, con monto y pp de margen)
+2. (Segunda línea relevante, con cifras)
+3. (Tercera, si aplica)
+
+PROYECCIÓN AL CIERRE
+(Con el run-rate actual, ¿el año cierra sobre o bajo presupuesto? Cuantifica el gap esperado en Ventas y Ut. Neta. Señala el supuesto: extrapolación lineal del acumulado.)
+
+INSIGHTS ACCIONABLES
+1. (Decisión o palanca concreta, con responsable sugerido e impacto esperado en $M o pp)
+2. (ídem)
+3. (ídem)
+
+ALERTAS
+(Solo desviaciones materiales o tendencias negativas que requieran atención este mes. Si todo va en línea, escribe "Sin alertas críticas.")
+
+Sé directo y cuantitativo. Usa valores en $M. Cada afirmación debe apoyarse en los datos. Este informe es para la Gerencia General y el Directorio."""
+
+    try:
+        chat = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1300,
+            temperature=0.3,
+        )
+        return chat.choices[0].message.content
+    except Exception as e:
+        return f"❌ Error al generar análisis: {e}"
+
+
 def generar_analisis_cc(datos: dict) -> str:
     """
     Genera análisis ejecutivo de Centro de Costos Real vs Presupuesto.
