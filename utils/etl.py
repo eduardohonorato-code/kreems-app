@@ -744,13 +744,15 @@ def run_etl_ppto_detalle(file_bytes: bytes, anio: str | int | None = None) -> di
             if opt not in df.columns:
                 df[opt] = ""
 
-        # Limpieza
-        df["codigo_cuenta"] = df["codigo_cuenta"].astype(str).str.strip()
-        df["codigo_cc"]     = df["codigo_cc"].astype(str).str.strip()
-        df["sociedad"]      = (df["sociedad"].astype(str).str.strip()
-                               .replace({"ACUNA": "ACUÑA", "": "Consolidado", "nan": "Consolidado"}))
+        # Limpieza (fillna ANTES de astype para no dejar 'nan'/None colgando)
+        df["codigo_cuenta"] = df["codigo_cuenta"].fillna("").astype(str).str.strip()
+        df["codigo_cc"]     = df["codigo_cc"].fillna("").astype(str).str.strip()
+        df["sociedad"]      = (df["sociedad"].fillna("").astype(str).str.strip()
+                               .replace({"ACUNA": "ACUÑA", "": "Consolidado",
+                                         "nan": "Consolidado", "None": "Consolidado"}))
         for c in ["item", "tipo", "notas"]:
-            df[c] = df[c].astype(str).str.strip().replace({"nan": ""})
+            df[c] = (df[c].fillna("").astype(str).str.strip()
+                     .replace({"nan": "", "None": "", "<NA>": ""}))
         for m in _MESES_DET:
             df[m] = pd.to_numeric(df[m], errors="coerce").fillna(0.0)
 

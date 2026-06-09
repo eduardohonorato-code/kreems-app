@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS staging.ppto_detalle (
     sociedad        TEXT         NOT NULL DEFAULT 'Consolidado',
     codigo_cc       TEXT         NOT NULL,
     codigo_cuenta   TEXT         NOT NULL,
-    item            TEXT         NOT NULL DEFAULT '',
+    item            TEXT         DEFAULT '',   -- puede ir vacío: cuentas sin persona asociada
     tipo            TEXT,
     notas           TEXT,
     ene  NUMERIC(18,2) NOT NULL DEFAULT 0,
