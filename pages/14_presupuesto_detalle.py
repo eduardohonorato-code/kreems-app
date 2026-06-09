@@ -8,7 +8,7 @@ import pandas as pd
 from datetime import date
 from utils.auth import login, requiere_admin
 from utils.db import query, query_live
-from utils.components import header, sidebar_kreems, boton_excel, ANO_FISCAL, NOMBRES_CC
+from utils.components import header, sidebar_kreems, boton_excel, fmt_mill, ANO_FISCAL, NOMBRES_CC
 from utils.etl import run_etl_ppto_detalle, reemplazar_ppto_detalle, sincronizar_ppto_detalle
 
 st.set_page_config(page_title="Presupuesto Detalle · Kreems", page_icon="💜", layout="wide")
@@ -37,7 +37,11 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-tab_edit, tab_carga = st.tabs(["✏️  Editar detalle", "⬆️  Cargar Excel plano"])
+tab_edit, tab_consol, tab_carga = st.tabs([
+    "✏️  Editar detalle",
+    "📊  Consolidado por CC",
+    "⬆️  Cargar Excel plano",
+])
 
 # ════════════════════════════════════════════════════════════
 # TAB: EDITAR
@@ -135,6 +139,87 @@ with tab_edit:
         if not df.empty:
             boton_excel({"PptoDetalle": df.drop(columns=["id"], errors="ignore")},
                         f"PptoDetalle_{sociedad_sel}_{_ANO}")
+
+# ════════════════════════════════════════════════════════════
+# TAB: CONSOLIDADO POR CC
+# ════════════════════════════════════════════════════════════
+with tab_consol:
+    st.markdown("##### Consolidado por Centro de Costo")
+    st.caption("Resumen del presupuesto detalle agregado por CC. Refleja los cambios "
+               "guardados en la pestaña de edición.")
+
+    col_fs, _ = st.columns([1.2, 4])
+    with col_fs:
+        soc_consol = st.selectbox("Sociedad", ["Todas"] + _SOCIEDADES, key="consol_soc")
+
+    filtro_soc = "" if soc_consol == "Todas" else "AND sociedad = :s"
+    params_c = {"a": _ANO}
+    if soc_consol != "Todas":
+        params_c["s"] = soc_consol
+
+    df_c = query_live(f"""
+        SELECT codigo_cc,
+               COUNT(*) AS items,
+               SUM(ene) AS ene, SUM(feb) AS feb, SUM(mar) AS mar, SUM(abr) AS abr,
+               SUM(may) AS may, SUM(jun) AS jun, SUM(jul) AS jul, SUM(ago) AS ago,
+               SUM(sep) AS sep, SUM(oct) AS oct, SUM(nov) AS nov, SUM(dic) AS dic
+        FROM staging.ppto_detalle
+        WHERE ano = :a {filtro_soc}
+        GROUP BY codigo_cc
+        ORDER BY codigo_cc
+    """, params_c)
+
+    if df_c.empty:
+        st.info("No hay items cargados aún para mostrar el consolidado.")
+    else:
+        df_c["Centro de Costo"] = df_c["codigo_cc"].map(NOMBRES_CC).fillna(df_c["codigo_cc"])
+        df_c["Total Anual"] = df_c[_MESES].sum(axis=1)
+
+        # KPI cards por CC
+        cols_kpi = st.columns(len(df_c) if len(df_c) <= 4 else 4)
+        for col, (_, r) in zip(cols_kpi, df_c.iterrows()):
+            with col:
+                st.markdown(f"""
+                <div style="background:#fff; border:1px solid #f0dff0; border-radius:12px;
+                            padding:14px 16px; text-align:center;">
+                    <div style="font-size:10px; color:#999;">{r['codigo_cc']}</div>
+                    <div style="font-size:13px; font-weight:700; color:#2d0050; margin:2px 0;">{r['Centro de Costo']}</div>
+                    <div style="font-size:18px; font-weight:700; color:#c4007a;">${r['Total Anual']/1_000_000:,.1f}M</div>
+                    <div style="font-size:10px; color:#aaa;">{int(r['items'])} items</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Tabla mensual por CC + fila TOTAL
+        df_tabla = df_c[["Centro de Costo", "items"] + _MESES + ["Total Anual"]].copy()
+        df_tabla = df_tabla.rename(columns={"items": "Items", **_MESES_LBL})
+        total_row = {"Centro de Costo": "TOTAL", "Items": int(df_c["items"].sum())}
+        for m, lbl in _MESES_LBL.items():
+            total_row[lbl] = df_c[m].sum()
+        total_row["Total Anual"] = df_c["Total Anual"].sum()
+        df_tabla = pd.concat([df_tabla, pd.DataFrame([total_row])], ignore_index=True)
+
+        _cols_num = list(_MESES_LBL.values()) + ["Total Anual"]
+
+        def _tot_consol(row):
+            if row["Centro de Costo"] == "TOTAL":
+                return ["font-weight:bold; background:#fdf5fb; color:#2d0050"] * len(row)
+            return [""] * len(row)
+
+        col_t, col_e = st.columns([4, 1])
+        with col_t:
+            st.markdown("**Detalle mensual por CC**")
+        with col_e:
+            boton_excel({"Consolidado CC": df_tabla}, f"PptoDetalle_ConsolidadoCC_{_ANO}")
+
+        st.dataframe(
+            df_tabla.style
+                .format({c: (lambda v: fmt_mill(v)) for c in _cols_num})
+                .apply(_tot_consol, axis=1),
+            use_container_width=True, hide_index=True, height=260,
+        )
+
 
 # ════════════════════════════════════════════════════════════
 # TAB: CARGAR EXCEL PLANO
