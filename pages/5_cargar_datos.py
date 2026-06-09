@@ -9,7 +9,7 @@ from datetime import date
 from utils.auth import login, requiere_admin
 from utils.components import header, sidebar_kreems
 from utils.db import query
-from utils.etl import run_etl_acuna, run_etl_gn, run_etl_presupuesto, run_etl_cv_sync, guardar_cv_staging, eliminar_cv_staging
+from utils.etl import run_etl_acuna, run_etl_gn, run_etl_cv_sync, guardar_cv_staging, eliminar_cv_staging
 
 _ANO = date.today().year
 
@@ -59,10 +59,9 @@ def mostrar_resultado(resultado: dict):
 
 
 # ── TABS ──────────────────────────────────────────────────────
-tab_acuna, tab_gn, tab_ppto, tab_cv, tab_log = st.tabs([
+tab_acuna, tab_gn, tab_cv, tab_log = st.tabs([
     "🏭  ACUÑA",
     "🌿  Gran Natural",
-    "📋  Presupuesto",
     "💰  Costo Variable Real",
     "📜  Historial de Cargas",
 ])
@@ -163,66 +162,6 @@ with tab_gn:
             mostrar_resultado(resultado_gn)
             if resultado_gn["ok"]:
                 st.cache_data.clear()
-
-
-# ────────────────────────────────────────────────────────────────
-# TAB: PRESUPUESTO
-# ────────────────────────────────────────────────────────────────
-with tab_ppto:
-    st.markdown("#### Cargar Presupuesto Maestro")
-    st.caption(
-        "Esta carga reemplaza el presupuesto anual completo. "
-        "Úsala solo cuando el archivo maestro cambie."
-    )
-    st.markdown("")
-
-    col_up3, col_info3 = st.columns([1.6, 1])
-
-    with col_up3:
-        archivo_ppto = st.file_uploader(
-            "Seleccionar Presupuesto_Maestro.xlsx",
-            type=["xlsx"], key="upload_ppto",
-            label_visibility="hidden",
-        )
-
-    with col_info3:
-        st.markdown("""
-        <div class="warn-box">
-            <b style="color:#7a5200;">Hojas requeridas</b><br>
-            • <code>ADMINISTRACIÓN</code> → CC-01<br>
-            • <code>PRODUCCIÓN</code> → CC-04<br>
-            • <code>COMERCIAL</code> → CC-02<br>
-            • <code>DISTRIBUCIÓN</code> → CC-03<br>
-            • <code>Consolidado_Automatico</code> → Ventas + CV<br><br>
-            ⚠ <b>Se elimina todo el presupuesto {_ANO}</b>
-            antes de insertar los nuevos datos.
-        </div>
-        """, unsafe_allow_html=True)
-
-    if archivo_ppto:
-        file_bytes_ppto = archivo_ppto.read()
-        st.markdown(
-            f"📄 **{archivo_ppto.name}** · {len(file_bytes_ppto)/1024:.1f} KB"
-        )
-        st.markdown("")
-
-        st.warning(
-            f"⚠ **Atención:** Se eliminarán todos los registros de presupuesto {_ANO} "
-            "y se reemplazarán con los datos del archivo subido."
-        )
-
-        confirmar = st.checkbox(
-            f"Confirmo que quiero reemplazar el presupuesto completo {_ANO}",
-            key="confirm_ppto"
-        )
-
-        if confirmar:
-            if st.button("Ejecutar ETL Presupuesto", type="primary", key="btn_etl_ppto"):
-                with st.spinner("Procesando presupuesto anual..."):
-                    resultado_ppto = run_etl_presupuesto(file_bytes_ppto)
-                mostrar_resultado(resultado_ppto)
-                if resultado_ppto["ok"]:
-                    st.cache_data.clear()
 
 
 # ────────────────────────────────────────────────────────────────
