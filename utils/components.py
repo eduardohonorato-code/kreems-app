@@ -479,6 +479,7 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
             _nav_section("Administración", top_pad=True)
             st.page_link("pages/5_cargar_datos.py",        label="⬆️  Cargar Datos",        use_container_width=True)
             st.page_link("pages/9_presupuesto_mensual.py", label="📅  Presupuesto Mensual",  use_container_width=True)
+            st.page_link("pages/14_presupuesto_detalle.py", label="🧾  Presupuesto Detalle",  use_container_width=True)
             st.page_link("pages/7_admin_usuarios.py",      label="👤  Admin Usuarios",       use_container_width=True)
 
         st.markdown("<hr style='border:none; border-top:1px solid rgba(255,255,255,0.08); margin:14px 0;'>",

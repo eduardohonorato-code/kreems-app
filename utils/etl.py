@@ -5,6 +5,7 @@ usan get_engine() de db.py (Supabase via st.secrets).
 """
 import io
 import re
+import unicodedata
 import pandas as pd
 from datetime import date
 from sqlalchemy import text
@@ -584,6 +585,259 @@ def run_etl_cv_sync() -> dict:
                              "ETL CV_REAL SYNC via webapp")
 
         return {"ok": True, "n_registros": len(df_insert), "logs": logs, "error": None}
+
+    except Exception as e:
+        _log(logs, f"✗ Error: {e}")
+        return {"ok": False, "n_registros": 0, "logs": logs, "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════
+# PRESUPUESTO DETALLE (item/persona, cuenta, CC)
+# staging.ppto_detalle  →  marts.fact_presupuesto (reagregado, CC <> CC-00)
+# ═══════════════════════════════════════════════════════════════
+
+_MESES_DET = ["ene", "feb", "mar", "abr", "may", "jun",
+              "jul", "ago", "sep", "oct", "nov", "dic"]
+FUENTE_PPTO_DET = "PPTO_DETALLE"
+
+
+def _norm_txt(s) -> str:
+    """Normaliza un encabezado: minúsculas, sin acentos, sin espacios extra."""
+    s = str(s).strip().lower()
+    s = "".join(c for c in unicodedata.normalize("NFD", s)
+                if unicodedata.category(c) != "Mn")
+    return s
+
+
+# Mapa de encabezado normalizado → campo interno
+_MAPA_COLS_DET = {
+    "sociedad": "sociedad",
+    "codigo cc": "codigo_cc",
+    "centro de costo": "_centro",
+    "codigo cuenta": "codigo_cuenta",
+    "nombre cuenta": "_nombre_cuenta",
+    "item / nombre": "item",
+    "item": "item",
+    "tipo": "tipo",
+    "notas": "notas",
+    **{m: m for m in _MESES_DET},
+}
+
+
+def sincronizar_ppto_detalle(anio: str | int | None = None) -> dict:
+    """
+    Reagrega staging.ppto_detalle → marts.fact_presupuesto (solo CC <> 'CC-00').
+    Suma por (codigo_cuenta, codigo_cc, periodo) — ignora sociedad para mantener
+    compatibilidad con la estructura actual de fact_presupuesto. Preserva CC-00
+    (Ventas y Costo Variable presupuestados).
+    """
+    if anio is None:
+        anio = date.today().year
+    anio = str(anio)
+    logs = []
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            df = pd.read_sql(text("""
+                SELECT codigo_cc, codigo_cuenta,
+                       ene, feb, mar, abr, may, jun, jul, ago, sep, oct, nov, dic
+                FROM staging.ppto_detalle
+                WHERE ano = :a AND codigo_cc <> 'CC-00'
+            """), conn, params={"a": int(anio)})
+
+        if df.empty:
+            _log(logs, "staging.ppto_detalle sin registros (CC<>CC-00) para el año.")
+            # Igual limpiamos lo reagregado previo para no dejar datos colgando
+            with engine.begin() as conn:
+                conn.execute(text("""
+                    DELETE FROM marts.fact_presupuesto
+                    WHERE periodo LIKE :a AND codigo_cc <> 'CC-00' AND fuente = :f
+                """), {"a": f"{anio}-%", "f": FUENTE_PPTO_DET})
+            return {"ok": True, "n_registros": 0, "logs": logs, "error": None}
+
+        # Melt a formato largo (periodo, valor) y agregar
+        registros = []
+        for _, row in df.iterrows():
+            for i, mes in enumerate(_MESES_DET, start=1):
+                valor = float(row[mes] or 0)
+                if valor == 0:
+                    continue
+                periodo = f"{anio}-{i:02d}"
+                registros.append({
+                    "fecha":          pd.to_datetime(f"{periodo}-01"),
+                    "codigo_cuenta":  str(row["codigo_cuenta"]).strip(),
+                    "codigo_cc":      str(row["codigo_cc"]).strip(),
+                    "valor":          valor,
+                    "periodo":        periodo,
+                    "fuente":         FUENTE_PPTO_DET,
+                    "archivo_origen": "staging.ppto_detalle",
+                })
+
+        df_long = pd.DataFrame(registros)
+        if df_long.empty:
+            _log(logs, "Sin montos > 0 para reagregar.")
+            return {"ok": True, "n_registros": 0, "logs": logs, "error": None}
+
+        # Agregar por cuenta + CC + periodo
+        df_agg = (df_long
+                  .groupby(["fecha", "codigo_cuenta", "codigo_cc", "periodo",
+                            "fuente", "archivo_origen"], as_index=False)["valor"].sum())
+        df_agg["fecha_id"] = df_agg["fecha"].apply(lambda d: int(d.strftime("%Y%m%d")))
+
+        with engine.begin() as conn:
+            r = conn.execute(text("""
+                DELETE FROM marts.fact_presupuesto
+                WHERE periodo LIKE :a AND codigo_cc <> 'CC-00'
+            """), {"a": f"{anio}-%"})
+            _log(logs, f"fact_presupuesto: {r.rowcount} filas CC<>CC-00 eliminadas")
+
+            df_agg.to_sql("fact_presupuesto", con=conn, schema="marts",
+                          if_exists="append", index=False, method="multi")
+
+        _log(logs, f"✓ Reagregadas {len(df_agg)} filas a fact_presupuesto "
+                   f"(${df_agg['valor'].sum():,.0f})")
+        _registrar_auditoria(engine, "marts.fact_presupuesto", f"{anio}-DET",
+                             len(df_agg), "Reagregación ppto_detalle")
+        return {"ok": True, "n_registros": len(df_agg), "logs": logs, "error": None}
+
+    except Exception as e:
+        _log(logs, f"✗ Error: {e}")
+        return {"ok": False, "n_registros": 0, "logs": logs, "error": str(e)}
+
+
+def run_etl_ppto_detalle(file_bytes: bytes, anio: str | int | None = None) -> dict:
+    """
+    Carga el Excel plano (hoja PPTO_DETALLE) → staging.ppto_detalle (reemplaza el año)
+    y reagrega a marts.fact_presupuesto. Formato esperado de columnas:
+    Sociedad, Código CC, Centro de Costo, Código Cuenta, Nombre Cuenta,
+    Item / Nombre, Tipo, Notas, Ene..Dic, Total Anual.
+    """
+    if anio is None:
+        anio = date.today().year
+    anio = str(anio)
+    logs = []
+    engine = get_engine()
+    try:
+        # Elegir hoja PPTO_DETALLE si existe; si no, la primera
+        xls = pd.ExcelFile(io.BytesIO(file_bytes))
+        hoja = next((h for h in xls.sheet_names if _norm_txt(h) == "ppto detalle"
+                     or "detalle" in _norm_txt(h)), xls.sheet_names[0])
+        df = pd.read_excel(xls, sheet_name=hoja)
+        _log(logs, f"Hoja leída: {hoja} ({len(df)} filas)")
+
+        # Mapear columnas por nombre normalizado
+        ren = {}
+        for col in df.columns:
+            campo = _MAPA_COLS_DET.get(_norm_txt(col))
+            if campo:
+                ren[col] = campo
+        df = df.rename(columns=ren)
+
+        req = ["codigo_cc", "codigo_cuenta"] + _MESES_DET
+        faltan = [c for c in req if c not in df.columns]
+        if faltan:
+            raise ValueError(f"Faltan columnas en el Excel: {faltan}. "
+                             f"Revisa que la hoja tenga el formato PPTO_DETALLE.")
+
+        # Defaults para columnas opcionales
+        for opt in ["sociedad", "item", "tipo", "notas"]:
+            if opt not in df.columns:
+                df[opt] = ""
+
+        # Limpieza
+        df["codigo_cuenta"] = df["codigo_cuenta"].astype(str).str.strip()
+        df["codigo_cc"]     = df["codigo_cc"].astype(str).str.strip()
+        df["sociedad"]      = (df["sociedad"].astype(str).str.strip()
+                               .replace({"ACUNA": "ACUÑA", "": "Consolidado", "nan": "Consolidado"}))
+        for c in ["item", "tipo", "notas"]:
+            df[c] = df[c].astype(str).str.strip().replace({"nan": ""})
+        for m in _MESES_DET:
+            df[m] = pd.to_numeric(df[m], errors="coerce").fillna(0.0)
+
+        # Filtrar filas válidas (cuenta con patrón y CC presente)
+        patron = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+        df = df[df["codigo_cuenta"].apply(lambda x: bool(patron.match(x))) &
+                df["codigo_cc"].str.startswith("CC-")].copy()
+        if df.empty:
+            raise ValueError("No se encontraron filas válidas (código de cuenta + CC).")
+
+        df["ano"] = int(anio)
+        cols_final = ["ano", "sociedad", "codigo_cc", "codigo_cuenta",
+                      "item", "tipo", "notas"] + _MESES_DET
+        df_insert = df[cols_final].copy()
+        _log(logs, f"Filas válidas a cargar: {len(df_insert)}")
+
+        with engine.begin() as conn:
+            r = conn.execute(text("DELETE FROM staging.ppto_detalle WHERE ano = :a"),
+                             {"a": int(anio)})
+            _log(logs, f"staging.ppto_detalle: {r.rowcount} filas anteriores eliminadas")
+            df_insert.to_sql("ppto_detalle", con=conn, schema="staging",
+                             if_exists="append", index=False, method="multi")
+
+        _log(logs, f"✓ {len(df_insert)} items cargados en staging.ppto_detalle")
+
+        # Reagregar a fact_presupuesto
+        res_sync = sincronizar_ppto_detalle(anio)
+        logs.extend(res_sync["logs"])
+        if not res_sync["ok"]:
+            return {"ok": False, "periodo": f"{anio} (detalle)", "n_registros": len(df_insert),
+                    "logs": logs, "error": res_sync["error"]}
+
+        _registrar_auditoria(engine, "staging.ppto_detalle", f"{anio}-DET",
+                             len(df_insert), "Carga ppto_detalle via webapp")
+        return {"ok": True, "periodo": f"{anio} (detalle)", "n_registros": len(df_insert),
+                "logs": logs, "error": None}
+
+    except Exception as e:
+        _log(logs, f"✗ Error: {e}")
+        return {"ok": False, "periodo": None, "n_registros": 0, "logs": logs, "error": str(e)}
+
+
+def reemplazar_ppto_detalle(anio: str | int, sociedad: str,
+                            df_rows: pd.DataFrame) -> dict:
+    """
+    Reemplaza los items de una (sociedad, año) en staging.ppto_detalle con las filas
+    editadas en la web y reagrega a fact_presupuesto. df_rows debe traer las columnas:
+    codigo_cc, codigo_cuenta, item, tipo, notas, ene..dic.
+    """
+    anio = str(anio)
+    logs = []
+    engine = get_engine()
+    try:
+        df = df_rows.copy()
+        # Normalizar / validar
+        df["codigo_cuenta"] = df["codigo_cuenta"].astype(str).str.strip()
+        df["codigo_cc"]     = df["codigo_cc"].astype(str).str.strip()
+        patron = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+        df = df[df["codigo_cuenta"].apply(lambda x: bool(patron.match(x))) &
+                df["codigo_cc"].str.startswith("CC-")].copy()
+        for c in ["item", "tipo", "notas"]:
+            if c not in df.columns:
+                df[c] = ""
+            df[c] = df[c].fillna("").astype(str).str.strip()
+        for m in _MESES_DET:
+            df[m] = pd.to_numeric(df.get(m, 0), errors="coerce").fillna(0.0)
+
+        df["ano"] = int(anio)
+        df["sociedad"] = sociedad
+        cols_final = ["ano", "sociedad", "codigo_cc", "codigo_cuenta",
+                      "item", "tipo", "notas"] + _MESES_DET
+        df_insert = df[cols_final]
+
+        with engine.begin() as conn:
+            r = conn.execute(text("""
+                DELETE FROM staging.ppto_detalle WHERE ano = :a AND sociedad = :s
+            """), {"a": int(anio), "s": sociedad})
+            _log(logs, f"Eliminadas {r.rowcount} filas previas — {sociedad} {anio}")
+            if not df_insert.empty:
+                df_insert.to_sql("ppto_detalle", con=conn, schema="staging",
+                                 if_exists="append", index=False, method="multi")
+        _log(logs, f"Guardadas {len(df_insert)} filas — {sociedad} {anio}")
+
+        res_sync = sincronizar_ppto_detalle(anio)
+        logs.extend(res_sync["logs"])
+        return {"ok": res_sync["ok"], "n_registros": len(df_insert),
+                "logs": logs, "error": res_sync.get("error")}
 
     except Exception as e:
         _log(logs, f"✗ Error: {e}")

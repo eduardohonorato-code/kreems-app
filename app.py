@@ -83,6 +83,11 @@ if not _cc_restringido:
 # Tarjeta de admin solo visible para admins
 if st.session_state.get("rol") == "admin":
     cards.append((
+        "🧾", "Presupuesto Detalle",
+        "Edita el presupuesto por item/persona, cuenta y CC. Reagrega automáticamente a las cuentas.",
+        "pages/14_presupuesto_detalle.py",
+    ))
+    cards.append((
         "👤", "Admin Usuarios",
         "Gestiona los usuarios de la app: crear, editar, cambiar contraseña y eliminar.",
         "pages/7_admin_usuarios.py",
