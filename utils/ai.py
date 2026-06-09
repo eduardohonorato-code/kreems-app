@@ -284,6 +284,148 @@ Sé directo y cuantitativo. Usa valores en $M. Cada afirmación debe apoyarse en
         return f"❌ Error al generar análisis: {e}"
 
 
+def generar_analisis_estructural(datos: dict) -> str:
+    """
+    Análisis ESTRUCTURAL del EERR mensual (vertical + horizontal) con persona CFO.
+    Interpreta la estructura de costos (% sobre ventas) y la evolución mes a mes
+    de los márgenes y las principales líneas.
+
+    datos debe contener:
+        sociedad, periodo_desde, periodo_hasta, mes_hasta, n_meses (int),
+        meses = ["Ene","Feb",...],
+        mensual = {ventas, cv, cf, opex, fin, nooper, ub, ebit, un}  # listas REAL por mes
+        ytd     = {ventas, cv, cf, opex, fin, nooper, ub, ebit, un}  # totales YTD
+    """
+    client = _get_client()
+    if client is None:
+        return (
+            "⚠ **API key no configurada.**\n\n"
+            "Agrega en `.streamlit/secrets.toml`:\n"
+            "```toml\n[groq]\napi_key = \"gsk_...\"\n```\n\n"
+            "Obtén tu key gratis en https://console.groq.com"
+        )
+
+    sociedad  = datos.get("sociedad", "Consolidado")
+    mes_hasta = datos.get("mes_hasta", "")
+    n_meses   = datos.get("n_meses", 0) or 0
+    meses     = datos.get("meses", []) or []
+    mensual   = datos.get("mensual", {}) or {}
+    ytd       = datos.get("ytd", {}) or {}
+
+    def _serie(key):
+        return mensual.get(key, []) or []
+
+    def _vpct(num, den):
+        """% sobre ventas, seguro ante división por cero."""
+        return (num / den * 100) if den else 0.0
+
+    # ── Estructura vertical YTD (% sobre ventas) ──
+    v_ytd = ytd.get("ventas", 0) or 0
+    vert_ytd = {
+        "Costo Variable": _vpct(ytd.get("cv", 0), v_ytd),
+        "Costo Fijo":     _vpct(ytd.get("cf", 0), v_ytd),
+        "OPEX":           _vpct(ytd.get("opex", 0), v_ytd),
+        "Margen Bruto":   _vpct(ytd.get("ub", 0), v_ytd),
+        "Margen EBIT":    _vpct(ytd.get("ebit", 0), v_ytd),
+        "Margen Neto":    _vpct(ytd.get("un", 0), v_ytd),
+    }
+    tabla_vert = "\n".join(
+        f"| {k} | {v:.1f}% |" for k, v in vert_ytd.items()
+    )
+
+    # ── Estructura vertical mes a mes (margen bruto/EBIT/neto por mes) ──
+    ventas_m = _serie("ventas")
+    def _margen_serie(key):
+        s = _serie(key)
+        return [
+            (s[i] / ventas_m[i] * 100) if i < len(ventas_m) and ventas_m[i] else 0.0
+            for i in range(len(s))
+        ]
+    mb_m   = _margen_serie("ub")
+    mebit_m = _margen_serie("ebit")
+    mneto_m = _margen_serie("un")
+
+    enc = " | ".join(meses) if meses else ""
+    def _fila_pct(nombre, serie):
+        celdas = " | ".join(f"{v:.1f}%" for v in serie) if serie else "(sin datos)"
+        return f"| {nombre} | {celdas} |"
+    tabla_margenes = "\n".join([
+        f"| Margen (% ventas) | {enc} |",
+        "|" + "---|" * (len(meses) + 1),
+        _fila_pct("Margen Bruto", mb_m),
+        _fila_pct("Margen EBIT",  mebit_m),
+        _fila_pct("Margen Neto",  mneto_m),
+    ])
+
+    # ── Variación horizontal del último mes vs el anterior ──
+    def _mom(key):
+        s = _serie(key)
+        if len(s) >= 2 and s[-2]:
+            return (s[-1] - s[-2]) / abs(s[-2]) * 100
+        return 0.0
+    mom_ventas = _mom("ventas")
+    mom_un     = _mom("un")
+
+    periodo = f"{datos['periodo_desde']} a {datos['periodo_hasta']}"
+
+    prompt = f"""Eres el Director Financiero (CFO) de una empresa chilena, experto en análisis de estructura
+financiera. Analizas el Estado de Resultados MENSUAL (valores reales del mes, sin presupuesto) mediante
+ANÁLISIS VERTICAL (cada línea como % de las ventas) y ANÁLISIS HORIZONTAL (evolución mes a mes).
+No describas las tablas: interprétalas para la Gerencia General.
+
+CONCEPTOS:
+- Análisis VERTICAL = estructura: qué porcentaje de cada peso vendido se va en cada costo y cuánto queda de margen.
+- Análisis HORIZONTAL = tendencia: cómo cambian las líneas y los márgenes de un mes a otro.
+- Un margen que se EXPANDE mes a mes es positivo; uno que se EROSIONA es una alerta aunque las ventas crezcan.
+- En costos como % de ventas: si el % SUBE, la eficiencia empeora; si BAJA, mejora.
+
+EMPRESA: {sociedad}
+PERÍODO: {periodo}  ({n_meses} meses, Enero–{mes_hasta})
+
+ESTRUCTURA VERTICAL ACUMULADA (YTD, % sobre ventas = 100%):
+| Componente | % de Ventas |
+|------------|-------------|
+{tabla_vert}
+
+EVOLUCIÓN DE MÁRGENES MES A MES (% sobre ventas de cada mes):
+{tabla_margenes}
+
+SEÑAL DE TENDENCIA (último mes {mes_hasta} vs mes anterior):
+- Ventas: {mom_ventas:+.1f}%   ·   Utilidad Neta: {mom_un:+.1f}%
+
+Estructura tu respuesta EXACTAMENTE así (en español, sin markdown extra ni asteriscos):
+
+ESTRUCTURA DE COSTOS (ANÁLISIS VERTICAL)
+(2-3 oraciones: cómo se reparte cada peso de venta, qué costo pesa más y cuánto margen neto queda. Usa los % YTD.)
+
+EVOLUCIÓN DE MÁRGENES (ANÁLISIS HORIZONTAL)
+(¿El margen bruto, EBIT y neto se expanden o se erosionan a lo largo de los meses? Cita los % de los meses inicial y final y la magnitud del cambio en pp.)
+
+EFICIENCIA OPERATIVA
+(Comenta la tendencia de Costo Variable, Costo Fijo y OPEX como % de ventas: ¿la empresa gana o pierde eficiencia a medida que avanza el año?)
+
+PALANCAS DE MEJORA
+1. (Acción concreta sobre la línea de costo o margen más crítica, con impacto estimado en pp de margen)
+2. (ídem)
+3. (ídem)
+
+ALERTAS
+(Solo erosiones de margen o costos que suben de forma sostenida. Si la estructura es estable o mejora, escribe "Estructura estable, sin alertas críticas.")
+
+Sé directo y cuantitativo. Razona en puntos porcentuales (pp) y % de ventas. Este informe es para la Gerencia General."""
+
+    try:
+        chat = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1200,
+            temperature=0.3,
+        )
+        return chat.choices[0].message.content
+    except Exception as e:
+        return f"❌ Error al generar análisis: {e}"
+
+
 def generar_analisis_cc(datos: dict) -> str:
     """
     Genera análisis ejecutivo de Centro de Costos Real vs Presupuesto.
