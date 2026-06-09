@@ -140,6 +140,86 @@ for col, (label, r, p) in zip(cols_kpi, _kpis):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
+# ── EXPORTAR P&L PRESUPUESTO vs REAL ──────────────────────────
+with st.container(border=True):
+    st.markdown("##### 📤 Exportar Estado de Resultados — Presupuesto vs Real")
+    st.caption(
+        "Excel con 3 hojas: P&L del **Presupuesto** mes a mes (12 meses), P&L **Real** "
+        "mes a mes, y la **comparación acumulada YTD**. Ideal para ajustar el presupuesto "
+        "viendo la desviación vs el real."
+    )
+
+    _MESES_EXP = [_ABREV[m] for m in range(1, 13)]
+    _PL_DEF = [
+        ("Ventas",                  "INGRESO",        "linea"),
+        ("Costo de Venta",          "COSTO_VAR",      "linea"),
+        ("Utilidad Bruta",          None,             "UB"),
+        ("Costo Fijo",              "COSTO_FIJO",     "linea"),
+        ("OPEX",                    "OPEX",           "linea"),
+        ("EBIT",                    None,             "EBIT"),
+        ("Gastos Financieros",      "FINANCIERO",     "linea"),
+        ("Gastos No Operacionales", "NO_OPERACIONAL", "linea"),
+        ("Utilidad Neta",           None,             "UN"),
+    ]
+
+    # P&L mensual de todo el año (presupuesto = 12 meses; real = meses con datos)
+    df_full = query(f"""
+        SELECT periodo, clasificacion,
+               SUM(valor_real) AS real, SUM(valor_ppto) AS ppto
+        FROM marts.vw_real_vs_ppto
+        WHERE periodo BETWEEN :d AND :h {filtro_soc} {filtro_cc}
+        GROUP BY periodo, clasificacion
+    """, {"d": f"{_ANO}-01", "h": f"{_ANO}-12"})
+
+    def _serie_full(col, clasif):
+        if df_full.empty:
+            return [0.0] * 12
+        sub = df_full[df_full["clasificacion"] == clasif].set_index("periodo")[col]
+        return [float(sub.get(f"{_ANO}-{m:02d}", 0) or 0) for m in range(1, 13)]
+
+    def _pl_mensual(col):
+        base = {c: _serie_full(col, c) for c in
+                ["INGRESO", "COSTO_VAR", "COSTO_FIJO", "OPEX", "FINANCIERO", "NO_OPERACIONAL"]}
+        ub   = [base["INGRESO"][i] - base["COSTO_VAR"][i] for i in range(12)]
+        ebit = [ub[i] - base["COSTO_FIJO"][i] - base["OPEX"][i] for i in range(12)]
+        un   = [ebit[i] - base["FINANCIERO"][i] - base["NO_OPERACIONAL"][i] for i in range(12)]
+        deriv = {"UB": ub, "EBIT": ebit, "UN": un}
+        rows = []
+        for nombre, clasif, kind in _PL_DEF:
+            serie = base[clasif] if kind == "linea" else deriv[kind]
+            d = {"Concepto": nombre}
+            for m in range(12):
+                d[_MESES_EXP[m]] = serie[m]
+            d["Total"] = sum(serie)
+            rows.append(d)
+        return pd.DataFrame(rows)
+
+    df_ppto_m = _pl_mensual("ppto")
+    df_real_m = _pl_mensual("real")
+
+    # Acumulado YTD (hasta el mes seleccionado) Real vs Ppto
+    ytd_rows = []
+    for nombre, clasif, kind in _PL_DEF:
+        if kind == "linea":
+            rv, pv = cum_real[clasif][_i], cum_ppto[clasif][_i]
+        else:
+            rv, pv = der_real[kind][_i], der_ppto[kind][_i]
+        ytd_rows.append({
+            "Concepto": nombre, "Real YTD": rv, "Ppto YTD": pv,
+            "Varianza": rv - pv, "% Ejec.": round(rv / pv * 100, 1) if pv else 0,
+        })
+    df_ytd = pd.DataFrame(ytd_rows)
+
+    boton_excel(
+        {"Ppto mensual": df_ppto_m,
+         "Real mensual": df_real_m,
+         f"Acum YTD a {mes_hasta_nom}": df_ytd},
+        f"EERR_Presupuesto_vs_Real_{periodo_hasta}",
+        label="⬇ Exportar P&L Ppto vs Real (Excel)",
+    )
+
+st.markdown("<br>", unsafe_allow_html=True)
+
 # ── TABLA PROGRESIÓN MES A MES ────────────────────────────────
 cum_sel = cum_real if modo == "Real" else cum_ppto
 der_sel = der_real if modo == "Real" else der_ppto
