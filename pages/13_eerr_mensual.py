@@ -10,7 +10,7 @@ from datetime import date
 from utils.auth import login, get_cc_sql_filter, requiere_acceso_total
 from utils.db import query, guardar_reporte
 from utils.components import (
-    header, sidebar_kreems, fmt_mill, boton_excel,
+    header, sidebar_kreems, fmt_mill, boton_excel, boton_excel_pct,
     get_soc_sql_filter, MESES, MES_NUM_ACTUAL,
 )
 from utils.ai import generar_analisis_estructural
@@ -187,7 +187,7 @@ with tab_vert:
 
     col_tv, col_ev = st.columns([4, 1])
     with col_ev:
-        boton_excel({"Analisis Vertical": df_v}, f"EERR_Vertical_{periodo_hasta}")
+        boton_excel_pct({"Analisis Vertical": df_v}, f"EERR_Vertical_{periodo_hasta}")
 
     _cols_v = _COL_LABELS + ["YTD"]
 
@@ -265,7 +265,7 @@ with tab_horiz:
 
         col_th, col_eh = st.columns([4, 1])
         with col_eh:
-            boton_excel({"Analisis Horizontal": df_h}, f"EERR_Horizontal_{periodo_hasta}")
+            boton_excel_pct({"Analisis Horizontal": df_h}, f"EERR_Horizontal_{periodo_hasta}")
 
         def _color_h(val):
             if not isinstance(val, (int, float)):

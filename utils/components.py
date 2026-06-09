@@ -720,3 +720,47 @@ def boton_excel(frames: dict, nombre_archivo: str, label: str = "⬇ Exportar Ex
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=False,
     )
+
+
+def df_to_excel_pct_bytes(frames: dict, id_col: str = "Concepto") -> bytes:
+    """
+    Exporta DataFrames cuyos valores están en puntos porcentuales (ej. 35.2 = 35.2%).
+    Convierte esas columnas a fracción (0.352) y aplica el formato de celda '0.0%',
+    de modo que en Excel aparecen directamente como porcentaje y, al reformatear,
+    no se inflan. Todas las columnas excepto `id_col` se tratan como porcentaje.
+    """
+    import io
+    import pandas as pd
+    from openpyxl.utils import get_column_letter
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        for sheet_name, df in frames.items():
+            df2 = df.copy()
+            pct_cols = [c for c in df2.columns if c != id_col]
+            for c in pct_cols:
+                df2[c] = pd.to_numeric(df2[c], errors="coerce") / 100.0
+
+            hoja = sheet_name[:31]
+            df2.to_excel(writer, sheet_name=hoja, index=False)
+            ws = writer.sheets[hoja]
+
+            pos = {name: i for i, name in enumerate(df2.columns)}  # 0-based
+            for c in pct_cols:
+                letra = get_column_letter(pos[c] + 1)  # openpyxl es 1-based
+                for fila in range(2, len(df2) + 2):     # fila 1 = encabezado
+                    ws[f"{letra}{fila}"].number_format = "0.0%"
+    return buf.getvalue()
+
+
+def boton_excel_pct(frames: dict, nombre_archivo: str,
+                    label: str = "⬇ Exportar Excel", id_col: str = "Concepto"):
+    """Igual que boton_excel pero las columnas numéricas se exportan como porcentaje real de Excel."""
+    datos = df_to_excel_pct_bytes(frames, id_col=id_col)
+    st.download_button(
+        label=label,
+        data=datos,
+        file_name=f"{nombre_archivo}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=False,
+    )
