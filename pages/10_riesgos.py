@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 from datetime import date
 from utils.auth import login, requiere_acceso_total
 from utils.components import header, sidebar_kreems, ANO_FISCAL, MESES, MES_NUM_ACTUAL
+from utils.db import guardar_reporte
 from utils.ai import generar_analisis_riesgos
 from utils.riesgos import (
     obtener_riesgos, guardar_riesgo, actualizar_riesgo, eliminar_riesgo,
@@ -563,34 +564,21 @@ with tab_ia:
         with col_sv1:
             if st.button("💾 Guardar en Reportes IA", use_container_width=True):
                 try:
-                    from sqlalchemy import text as sqlt
-                    from utils.db import get_engine
-                    import json as _json
                     titulo_rpt = f"Riesgos y Oportunidades — {mes_ref} {ANO_FISCAL} — {filtro_soc}"
-                    datos_json = _json.dumps({
-                        "n_riesgos":    len(df_riesgos),
-                        "n_oport":      len(df_oport),
-                        "exposicion":   float(exposicion),
-                        "upside":       float(upside),
-                        "ve_neto":      float(ve_neto_ia),
-                    })
-                    with get_engine().begin() as conn:
-                        conn.execute(sqlt("""
-                            INSERT INTO reports.reportes_guardados
-                                (titulo, tipo, periodo_desde, periodo_hasta,
-                                 sociedad, datos_json, analisis_ia, creado_por)
-                            VALUES
-                                (:titulo, 'RIESGOS', :desde, :hasta,
-                                 :soc, :datos, :analisis, :usr)
-                        """), {
-                            "titulo":   titulo_rpt,
-                            "desde":    periodo_ref,
-                            "hasta":    periodo_ref,
-                            "soc":      filtro_soc,
-                            "datos":    datos_json,
-                            "analisis": analisis_ia_txt,
-                            "usr":      _usuario,
-                        })
+                    guardar_reporte(
+                        titulo=titulo_rpt, tipo="RIESGOS",
+                        periodo_desde=periodo_ref, periodo_hasta=periodo_ref,
+                        sociedad=filtro_soc,
+                        datos={
+                            "n_riesgos":  len(df_riesgos),
+                            "n_oport":    len(df_oport),
+                            "exposicion": float(exposicion),
+                            "upside":     float(upside),
+                            "ve_neto":    float(ve_neto_ia),
+                        },
+                        analisis=analisis_ia_txt,
+                        creado_por=_usuario,
+                    )
                     st.success("✓ Análisis guardado en Reportes IA.")
                 except Exception as e:
                     st.error(f"Error al guardar: {e}")

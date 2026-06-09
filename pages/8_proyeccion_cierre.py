@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 from datetime import date
 from utils.auth import login, get_cc_sql_filter, requiere_acceso_total
 from utils.db import query
-from utils.components import header, sidebar_kreems, fmt_mill, boton_excel
+from utils.components import header, sidebar_kreems, fmt_mill, boton_excel, get_soc_sql_filter
 
 st.set_page_config(page_title="Proyección al Cierre · Kreems", page_icon="💜", layout="wide")
 
@@ -24,23 +24,14 @@ header("Proyección al Cierre")
 
 _HOY           = date.today()
 _ANO           = _HOY.year
-MES_ACTUAL     = _HOY.month          # meses con datos reales (1-12)
-MESES_RESTANTES = 12 - MES_ACTUAL    # meses sin datos aún
 
 NOMBRES_MESES = {
     1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",
     7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"
 }
 
-filtro_soc = f"AND sociedad = '{sociedad_sel}'" if sociedad_sel != "Todas" else ""
+filtro_soc = get_soc_sql_filter(sociedad_sel)
 filtro_cc  = get_cc_sql_filter()
-
-st.markdown(f"""
-<p style="color:#888; font-size:13px; margin-bottom:20px;">
-    Proyección basada en los <b>{MES_ACTUAL} meses</b> con datos reales ({NOMBRES_MESES[1]} – {NOMBRES_MESES[MES_ACTUAL]}).
-    Quedan <b>{MESES_RESTANTES} meses</b> por proyectar hasta el cierre del año.
-</p>
-""", unsafe_allow_html=True)
 
 # ── DATOS ─────────────────────────────────────────────────────
 # Serie mensual completa del año (real + presupuesto mes a mes)
@@ -61,6 +52,22 @@ df_mensual = query(f"""
 if df_mensual.empty:
     st.info("Sin datos disponibles para el año en curso.")
     st.stop()
+
+# Detectar el último mes con datos reales (no asumir el mes calendario:
+# si hoy es junio pero solo hay reales hasta mayo, MES_ACTUAL debe ser 5).
+_meses_con_real = (
+    df_mensual.loc[df_mensual["real"].fillna(0) != 0, "periodo"]
+    .astype(str).str[5:7].astype(int)
+)
+MES_ACTUAL      = int(_meses_con_real.max()) if not _meses_con_real.empty else _HOY.month
+MESES_RESTANTES = 12 - MES_ACTUAL    # meses sin datos aún
+
+st.markdown(f"""
+<p style="color:#888; font-size:13px; margin-bottom:20px;">
+    Proyección basada en los <b>{MES_ACTUAL} meses</b> con datos reales ({NOMBRES_MESES[1]} – {NOMBRES_MESES[MES_ACTUAL]}).
+    Quedan <b>{MESES_RESTANTES} meses</b> por proyectar hasta el cierre del año.
+</p>
+""", unsafe_allow_html=True)
 
 # ── HELPERS ───────────────────────────────────────────────────
 CLASIFS = {

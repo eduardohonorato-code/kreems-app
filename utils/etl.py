@@ -6,6 +6,7 @@ usan get_engine() de db.py (Supabase via st.secrets).
 import io
 import re
 import pandas as pd
+from datetime import date
 from sqlalchemy import text
 from .db import get_engine
 
@@ -163,6 +164,12 @@ def run_etl_acuna(file_bytes: bytes) -> dict:
         if df.empty:
             raise ValueError("No se encontraron registros válidos. Verifica que las cuentas estén en la tabla de homologación.")
 
+        # Excluir cuenta 3.1.01.001: se gestiona exclusivamente via staging.cv_real_manual
+        antes = len(df)
+        df = df[df["codigo_cuenta"] != CODIGO_CUENTA_CV].copy()
+        if len(df) < antes:
+            _log(logs, f"Cuenta {CODIGO_CUENTA_CV} excluida del ETL (se gestiona via CV staging)")
+
         # Resumen por CC
         for cc, val in df.groupby("codigo_cc")["valor"].sum().items():
             _log(logs, f"  {cc}: ${val:,.0f}")
@@ -265,6 +272,12 @@ def run_etl_gn(file_bytes: bytes) -> dict:
         if df_final.empty:
             raise ValueError("No se encontraron registros válidos después del filtrado.")
 
+        # Excluir cuenta 3.1.01.001: se gestiona exclusivamente via staging.cv_real_manual
+        antes_gn = len(df_final)
+        df_final = df_final[df_final["codigo_cuenta"] != CODIGO_CUENTA_CV].copy()
+        if len(df_final) < antes_gn:
+            _log(logs, f"Cuenta {CODIGO_CUENTA_CV} excluida del ETL (se gestiona via CV staging)")
+
         for cc, val in df_final.groupby("codigo_cc")["valor"].sum().items():
             _log(logs, f"  {cc}: ${val:,.0f}")
 
@@ -298,11 +311,13 @@ def run_etl_gn(file_bytes: bytes) -> dict:
 # ETL PRESUPUESTO
 # ═══════════════════════════════════════════════════════════════
 
-def run_etl_presupuesto(file_bytes: bytes, anio: str = "2026") -> dict:
+def run_etl_presupuesto(file_bytes: bytes, anio: str | None = None) -> dict:
     """
     Procesa Presupuesto_Maestro.xlsx → marts.fact_presupuesto.
-    Reemplaza todo el presupuesto del año indicado.
+    Reemplaza todo el presupuesto del año indicado (por defecto, el año actual).
     """
+    if anio is None:
+        anio = str(date.today().year)
     logs = []
     engine = get_engine()
     MESES = {k: f"{anio}-{v}" for k, v in MESES_PPTO.items()}
@@ -449,6 +464,8 @@ def guardar_cv_staging(periodo: str, sociedad: str, monto: float) -> dict:
     """
     logs = []
     engine = get_engine()
+    # Normalizar nombre de sociedad para consistencia con fact_real
+    sociedad = sociedad.replace("ACUNA", "ACUÑA") if sociedad == "ACUNA" else sociedad
     try:
         fecha = pd.to_datetime(f"{periodo}-01")
         with engine.begin() as conn:
@@ -474,6 +491,7 @@ def eliminar_cv_staging(periodo: str, sociedad: str) -> dict:
     """Elimina un registro de staging.cv_real_manual."""
     logs = []
     engine = get_engine()
+    sociedad = sociedad.replace("ACUNA", "ACUÑA") if sociedad == "ACUNA" else sociedad
     try:
         with engine.begin() as conn:
             r = conn.execute(text("""
@@ -497,6 +515,16 @@ def run_etl_cv_sync() -> dict:
     logs = []
     engine = get_engine()
     try:
+        # Migrar registros históricos con 'ACUNA' (sin tilde) a 'ACUÑA' en staging
+        with engine.begin() as conn:
+            n_migrados = conn.execute(text("""
+                UPDATE staging.cv_real_manual
+                SET sociedad = 'ACUÑA'
+                WHERE sociedad = 'ACUNA'
+            """)).rowcount
+            if n_migrados:
+                _log(logs, f"Staging: {n_migrados} registros 'ACUNA' migrados a 'ACUÑA'")
+
         # Leer staging
         with engine.connect() as conn:
             df = pd.read_sql(text("""
@@ -513,6 +541,9 @@ def run_etl_cv_sync() -> dict:
         if df.empty:
             _log(logs, "staging.cv_real_manual no tiene registros con monto > 0.")
             return {"ok": True, "n_registros": 0, "logs": logs, "error": None}
+
+        # Normalizar nombre de sociedad: 'ACUNA' sin tilde → 'ACUÑA' con tilde (seguridad extra)
+        df["sociedad"] = df["sociedad"].replace({"ACUNA": "ACUÑA"})
 
         _log(logs, f"Registros en staging: {len(df)}")
         for _, row in df.iterrows():
@@ -534,10 +565,14 @@ def run_etl_cv_sync() -> dict:
         # Sincronizar período a período
         with engine.begin() as conn:
             for (periodo, sociedad), grupo in df_insert.groupby(["periodo", "sociedad"]):
+                # Limpiar tanto 'ACUÑA' como 'ACUNA' (variante sin tilde de datos históricos)
+                sociedad_alt = "ACUNA" if sociedad == "ACUÑA" else sociedad
                 r = conn.execute(text("""
                     DELETE FROM marts.fact_real
-                    WHERE periodo = :p AND sociedad = :s AND codigo_cuenta = :cc
-                """), {"p": periodo, "s": sociedad, "cc": CODIGO_CUENTA_CV})
+                    WHERE periodo = :p
+                      AND sociedad IN (:s, :s_alt)
+                      AND codigo_cuenta = :cc
+                """), {"p": periodo, "s": sociedad, "s_alt": sociedad_alt, "cc": CODIGO_CUENTA_CV})
                 _log(logs, f"  Eliminados {r.rowcount} registros anteriores — {sociedad} {periodo}")
 
                 grupo.to_sql("fact_real", con=conn, schema="marts",

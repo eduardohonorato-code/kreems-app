@@ -3,13 +3,13 @@ Centro de Costos — tarjetas + gráfico + resumen por CC
 """
 import streamlit as st
 import pandas as pd
-import json
 import plotly.graph_objects as go
 from utils.auth import login, get_cc_filter, get_cc_sql_filter
-from utils.db import query
+from utils.db import query, guardar_reporte
 from utils.components import (
     header, selector_meses, sidebar_kreems, fmt_mill, cc_card, boton_excel,
-    semaforo_texto, semaforo_style_cell,
+    semaforo_texto, semaforo_style_cell, get_soc_sql_filter,
+    NOMBRES_CC as CC_NOMBRES,
 )
 from utils.ai import generar_analisis_cc
 from utils.notas import guardar_nota, obtener_notas, eliminar_nota
@@ -24,20 +24,14 @@ header("Centro de Costos")
 periodo_desde, periodo_hasta = selector_meses(key="cc")
 st.markdown("<br>", unsafe_allow_html=True)
 
-filtro_soc = f"AND sociedad = '{sociedad_sel}'" if sociedad_sel != "Todas" else ""
+filtro_soc = get_soc_sql_filter(sociedad_sel)
 filtro_cc  = get_cc_sql_filter()
 COLOR_GOOD = "#0F6E56"
 COLOR_BAD  = "#cc0000"
 
-_TODOS_CC = {
-    "CC-01": "Administración",
-    "CC-02": "Comercial",
-    "CC-03": "Distribución",
-    "CC-04": "Producción",
-}
 # Restringir tarjetas al CC permitido del usuario
 _cc_permitidos = get_cc_filter()
-NOMBRES_CC = {k: v for k, v in _TODOS_CC.items()
+NOMBRES_CC = {k: v for k, v in CC_NOMBRES.items()
               if _cc_permitidos is None or k in _cc_permitidos}
 
 df_cc = query(f"""
@@ -291,26 +285,14 @@ if st.session_state["cc_analisis_texto"]:
         with col_save:
             if st.button("Guardar", type="primary", use_container_width=True, key="cc_guardar_btn"):
                 try:
-                    from sqlalchemy import text as sqlt
-                    from utils.db import get_engine
                     datos_snap = st.session_state.get("cc_analisis_datos", {})
-                    with get_engine().begin() as conn:
-                        conn.execute(sqlt("""
-                            INSERT INTO reports.reportes_guardados
-                                (titulo, tipo, periodo_desde, periodo_hasta,
-                                 sociedad, datos_json, analisis_ia, creado_por)
-                            VALUES
-                                (:titulo, 'CC', :pdesde, :phasta,
-                                 :sociedad, :datos, :analisis, :usuario)
-                        """), {
-                            "titulo":   titulo_cc,
-                            "pdesde":   periodo_desde,
-                            "phasta":   periodo_hasta,
-                            "sociedad": sociedad_sel,
-                            "datos":    json.dumps(datos_snap),
-                            "analisis": st.session_state["cc_analisis_texto"],
-                            "usuario":  st.session_state.get("nombre", ""),
-                        })
+                    guardar_reporte(
+                        titulo=titulo_cc, tipo="CC",
+                        periodo_desde=periodo_desde, periodo_hasta=periodo_hasta,
+                        sociedad=sociedad_sel, datos=datos_snap,
+                        analisis=st.session_state["cc_analisis_texto"],
+                        creado_por=st.session_state.get("nombre", ""),
+                    )
                     st.success("✓ Reporte guardado. Ve a **Reportes Guardados** para revisarlo.")
                 except Exception as e:
                     st.error(f"Error al guardar: {e}")

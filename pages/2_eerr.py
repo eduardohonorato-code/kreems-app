@@ -4,13 +4,13 @@ EERR — Estado de Resultados Real vs Presupuesto
 import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
-import json
 from datetime import date
 from utils.auth import login, get_cc_sql_filter, requiere_acceso_total
-from utils.db import query
+from utils.db import query, guardar_reporte
 from utils.components import (
     header, selector_meses, sidebar_kreems, fmt_clp, fmt_mill,
     badge_html, boton_excel, semaforo_texto, semaforo_style_cell,
+    get_soc_sql_filter, NOMBRES_CC,
 )
 from utils.ai import generar_analisis_eerr
 from utils.pdf_report import generar_pdf_eerr
@@ -28,7 +28,7 @@ header(f"Estado de Resultados — Real vs Presupuesto {_ANO}")
 periodo_desde, periodo_hasta = selector_meses(key="eerr")
 st.markdown("<br>", unsafe_allow_html=True)
 
-filtro_soc = f"AND sociedad = '{sociedad_sel}'" if sociedad_sel != "Todas" else ""
+filtro_soc = get_soc_sql_filter(sociedad_sel)
 filtro_cc  = get_cc_sql_filter()
 
 # ── DATOS RAW ────────────────────────────────────────────────
@@ -168,8 +168,7 @@ _bridge_labels  = [
 _bridge_measure = ["absolute","relative","relative","relative","relative","relative","relative","total"]
 _bridge_values  = [un_p, dv, dcv, dcf, dopex, dfin, dnooper, un_r]
 
-import plotly.graph_objects as _go
-fig_bridge = _go.Figure(_go.Waterfall(
+fig_bridge = go.Figure(go.Waterfall(
     orientation="v", measure=_bridge_measure,
     x=_bridge_labels, y=[v/1_000_000 for v in _bridge_values],
     connector={"line":{"color":"#e0c8e8","width":1,"dash":"dot"}},
@@ -287,10 +286,7 @@ with tab_pl:
         "Gastos Financieros":        "FINANCIERO",
         "Gastos No Operacionales":   "NO_OPERACIONAL",
     }
-    _NOMBRES_CC = {
-        "CC-01": "Administración", "CC-02": "Comercial",
-        "CC-03": "Distribución",   "CC-04": "Producción",
-    }
+    _NOMBRES_CC = NOMBRES_CC
 
     linea_sel = st.selectbox(
         "Línea",
@@ -631,25 +627,13 @@ if st.session_state["analisis_texto"]:
         if guardar_btn and titulo_rpt:
             datos_snap = st.session_state.get("analisis_datos", {})
             try:
-                from sqlalchemy import text as sqlt
-                from utils.db import get_engine
-                with get_engine().begin() as conn:
-                    conn.execute(sqlt("""
-                        INSERT INTO reports.reportes_guardados
-                            (titulo, tipo, periodo_desde, periodo_hasta,
-                             sociedad, datos_json, analisis_ia, creado_por)
-                        VALUES
-                            (:titulo, 'EERR', :pdesde, :phasta,
-                             :sociedad, :datos, :analisis, :usuario)
-                    """), {
-                        "titulo":   titulo_rpt,
-                        "pdesde":   periodo_desde,
-                        "phasta":   periodo_hasta,
-                        "sociedad": sociedad_sel,
-                        "datos":    json.dumps(datos_snap),
-                        "analisis": st.session_state["analisis_texto"],
-                        "usuario":  st.session_state.get("nombre", ""),
-                    })
+                guardar_reporte(
+                    titulo=titulo_rpt, tipo="EERR",
+                    periodo_desde=periodo_desde, periodo_hasta=periodo_hasta,
+                    sociedad=sociedad_sel, datos=datos_snap,
+                    analisis=st.session_state["analisis_texto"],
+                    creado_por=st.session_state.get("nombre", ""),
+                )
                 st.success("✓ Reporte guardado. Ve a **Reportes Guardados** para revisarlo.")
             except Exception as e:
                 st.error(f"Error al guardar: {e}")

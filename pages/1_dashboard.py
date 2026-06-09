@@ -9,7 +9,8 @@ from utils.auth import login, get_cc_sql_filter
 from utils.db import query
 from utils.components import (
     header, selector_meses, kpi_card, sidebar_kreems,
-    fmt_mill, badge_html, boton_excel, semaforo_texto, semaforo_style_cell
+    fmt_mill, badge_html, boton_excel, semaforo_texto, semaforo_style_cell,
+    get_soc_sql_filter,
 )
 
 _ANO = date.today().year
@@ -35,7 +36,7 @@ periodo_desde, periodo_hasta = selector_meses(key="dash", default="Mayo")
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ── FILTROS SQL ───────────────────────────────────────────────
-filtro_soc = f"AND sociedad = '{sociedad_sel}'" if sociedad_sel != "Todas" else ""
+filtro_soc = get_soc_sql_filter(sociedad_sel)
 filtro_cc  = get_cc_sql_filter()
 
 # ── DATOS: Ventas totales periodo seleccionado ────────────────

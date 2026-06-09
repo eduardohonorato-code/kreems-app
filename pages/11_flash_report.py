@@ -8,7 +8,7 @@ import pandas as pd
 from datetime import date
 
 from utils.auth import login, get_cc_sql_filter, requiere_acceso_total
-from utils.components import header, sidebar_kreems, inject_font
+from utils.components import header, sidebar_kreems, inject_font, get_soc_sql_filter
 from utils.db import query
 from utils.ai import generar_analisis_flash
 from utils.pdf_report import generar_flash_report
@@ -62,8 +62,8 @@ with c3:
 
 # ── Queries ─────────────────────────────────────────────────────
 def _load_pl(p: str, soc: str) -> pd.DataFrame:
-    """Mismo patrón que EERR: valor_real/valor_ppto, filtro_soc como f-string."""
-    filtro_soc = f"AND sociedad = '{soc}'" if soc != "Todas" else ""
+    """Mismo patrón que EERR: valor_real/valor_ppto, filtro por sociedad y CC."""
+    filtro_soc = get_soc_sql_filter(soc)
     filtro_cc  = get_cc_sql_filter()
     return query(f"""
         SELECT clasificacion,
@@ -77,7 +77,7 @@ def _load_pl(p: str, soc: str) -> pd.DataFrame:
 
 def _load_top_desv(p: str, soc: str, n: int = 7) -> pd.DataFrame:
     """Top N cuentas por desviación absoluta. nombre_cuenta ya está en la vista."""
-    filtro_soc = f"AND sociedad = '{soc}'" if soc != "Todas" else ""
+    filtro_soc = get_soc_sql_filter(soc)
     filtro_cc  = get_cc_sql_filter()
     return query(f"""
         SELECT nombre_cuenta AS cuenta,

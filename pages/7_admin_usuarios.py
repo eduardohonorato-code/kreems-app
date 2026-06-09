@@ -4,7 +4,7 @@ CRUD completo sobre admin.usuarios
 """
 import streamlit as st
 import pandas as pd
-from utils.auth import login, requiere_admin
+from utils.auth import login, requiere_admin, hash_password
 from utils.components import header, sidebar_kreems
 from utils.db import get_engine, query_live
 from sqlalchemy import text as sqlt
@@ -116,7 +116,7 @@ with tab_crear:
                 VALUES (:u, :p, :n, :r, :cc, :a)
             """, {
                 "u": nu_usuario.strip(),
-                "p": nu_password,
+                "p": hash_password(nu_password),
                 "n": nu_nombre.strip(),
                 "r": nu_rol,
                 "cc": cc_val,
@@ -180,7 +180,7 @@ with tab_pwd:
         else:
             ok = ejecutar(
                 "UPDATE admin.usuarios SET password=:p WHERE usuario=:u",
-                {"p": nueva_pwd, "u": pwd_sel}
+                {"p": hash_password(nueva_pwd), "u": pwd_sel}
             )
             if ok:
                 st.success(f"✓ Contraseña de **{pwd_sel}** actualizada.")

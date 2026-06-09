@@ -1,8 +1,14 @@
 """
 Autenticación — lee usuarios desde admin.usuarios (PostgreSQL).
 Si la tabla no existe, cae back a .streamlit/secrets.toml.
+
+Las contraseñas se almacenan con hash bcrypt. Para no bloquear a los
+usuarios existentes (guardados en texto plano), el login hace una
+migración perezosa: si la contraseña almacenada está en texto plano y
+coincide, se re-guarda como hash de forma transparente.
 """
 import streamlit as st
+import bcrypt
 from utils.components import _logo_html, inject_font
 from datetime import date
 
@@ -11,26 +17,66 @@ def _subtitulo_login() -> str:
     return f"Control Presupuestario {date.today().year}"
 
 
+# ── HASHING DE CONTRASEÑAS ────────────────────────────────────
+def hash_password(plain: str) -> str:
+    """Genera el hash bcrypt de una contraseña en texto plano."""
+    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _is_bcrypt_hash(value) -> bool:
+    """True si el valor almacenado ya es un hash bcrypt."""
+    return isinstance(value, str) and value.startswith(("$2a$", "$2b$", "$2y$"))
+
+
+def verify_password(plain: str, stored: str) -> bool:
+    """Verifica la contraseña contra el valor almacenado (hash o texto plano legacy)."""
+    if _is_bcrypt_hash(stored):
+        try:
+            return bcrypt.checkpw(plain.encode("utf-8"), stored.encode("utf-8"))
+        except Exception:
+            return False
+    # Legacy: contraseña almacenada en texto plano
+    return plain == stored
+
+
 def _get_user_from_db(usuario: str, password: str) -> dict | None:
     """
-    Busca el usuario en admin.usuarios.
-    Retorna dict con {rol, nombre, cc_permitidos} o None si no existe / inactivo.
+    Busca el usuario en admin.usuarios y verifica la contraseña en Python.
+    Retorna dict con {rol, nombre, cc_permitidos} o None si no existe / inactivo / clave incorrecta.
+    Migra contraseñas legacy de texto plano a hash bcrypt al iniciar sesión.
     """
     try:
         from utils.db import get_engine
         from sqlalchemy import text
-        with get_engine().connect() as conn:
+        engine = get_engine()
+        with engine.connect() as conn:
             row = conn.execute(text("""
-                SELECT nombre, rol, cc_permitidos
+                SELECT nombre, rol, cc_permitidos, password
                 FROM admin.usuarios
-                WHERE usuario = :u AND password = :p AND activo = TRUE
-            """), {"u": usuario, "p": password}).fetchone()
-        if row:
-            return {
-                "nombre": row[0],
-                "rol": row[1],
-                "cc_permitidos": list(row[2]) if row[2] else None,
-            }
+                WHERE usuario = :u AND activo = TRUE
+            """), {"u": usuario}).fetchone()
+        if not row:
+            return None
+
+        stored = row[3]
+        if not verify_password(password, stored):
+            return None
+
+        # Migración perezosa: si estaba en texto plano, re-guardar como hash
+        if not _is_bcrypt_hash(stored):
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(
+                        "UPDATE admin.usuarios SET password = :p WHERE usuario = :u"
+                    ), {"p": hash_password(password), "u": usuario})
+            except Exception:
+                pass  # no bloquear el login si la migración falla
+
+        return {
+            "nombre": row[0],
+            "rol": row[1],
+            "cc_permitidos": list(row[2]) if row[2] else None,
+        }
     except Exception:
         pass
     return None

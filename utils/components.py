@@ -233,6 +233,30 @@ MESES_PERIODOS = {
     }.items()
 }
 
+# ── CONSTANTES DE NEGOCIO (fuente única de verdad) ────────────
+# Nombres de sociedad: usar SIEMPRE estas constantes, nunca literales sueltos.
+# Evita inconsistencias como 'ACUNA' vs 'ACUÑA' que rompen los filtros SQL.
+SOC_ACUNA        = "ACUÑA"
+SOC_GRAN_NATURAL = "GRAN_NATURAL"
+SOCIEDADES       = [SOC_GRAN_NATURAL, SOC_ACUNA]
+OPCIONES_SOCIEDAD = ["Todas"] + SOCIEDADES
+
+# Mapa código CC → nombre. Único lugar donde se define.
+NOMBRES_CC = {
+    "CC-01": "Administración",
+    "CC-02": "Comercial",
+    "CC-03": "Distribución",
+    "CC-04": "Producción",
+}
+
+
+def get_soc_sql_filter(sociedad_sel: str) -> str:
+    """Fragmento SQL para filtrar por sociedad.
+    Retorna '' si es 'Todas'. Los valores provienen de OPCIONES_SOCIEDAD
+    (lista cerrada), por lo que no hay entrada de texto libre del usuario.
+    """
+    return f"AND sociedad = '{sociedad_sel}'" if sociedad_sel != "Todas" else ""
+
 
 def _estado_mes(num: int) -> tuple[str, str, str]:
     """Retorna (label, color, icono) según el estado del mes."""
@@ -437,6 +461,7 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
         st.page_link("app.py",                      label="🏠  Inicio",                   use_container_width=True)
         st.page_link("pages/1_dashboard.py",        label="📊  Resumen Ejecutivo",         use_container_width=True)
         st.page_link("pages/2_eerr.py",             label="📋  Estado de Resultados",      use_container_width=True)
+        st.page_link("pages/12_eerr_acumulado.py",  label="📈  EERR Acumulado",            use_container_width=True)
         st.page_link("pages/3_centro_costos.py",    label="🏢  Centro de Costos",          use_container_width=True)
         st.page_link("pages/4_control_cuentas.py",  label="📑  Control Cuentas",           use_container_width=True)
 
@@ -465,19 +490,13 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
             st.markdown("**🏭 Sociedad**")
             sociedad_sel = st.radio(
                 "sociedad",
-                ["Todas", "GRAN_NATURAL", "ACUÑA"],
+                OPCIONES_SOCIEDAD,
                 label_visibility="collapsed"
             )
 
         if mostrar_cc:
             st.markdown("**🏢 Centro de Costo**")
-            opciones_cc = {
-                "Administración": "CC-01",
-                "Comercial":      "CC-02",
-                "Distribución":   "CC-03",
-                "Producción":     "CC-04",
-            }
-            for nombre_cc, codigo in opciones_cc.items():
+            for codigo, nombre_cc in NOMBRES_CC.items():
                 if st.checkbox(nombre_cc, value=True, key=f"cc_{codigo}"):
                     cc_sel.append(codigo)
 

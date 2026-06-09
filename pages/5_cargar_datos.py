@@ -281,7 +281,7 @@ with tab_cv:
 
         with st.form("form_cv", clear_on_submit=True):
             mes_lbl   = st.selectbox("Periodo", list(MESES_OPTS.keys()), key="cv_mes")
-            sociedad  = st.radio("Sociedad", ["ACUNA", "GRAN_NATURAL"],
+            sociedad  = st.radio("Sociedad", ["ACUÑA", "GRAN_NATURAL"],
                                  horizontal=True, key="cv_soc")
             monto     = st.number_input("Monto CV Real ($)", min_value=0.0,
                                         step=100_000.0, format="%.0f", key="cv_monto")
@@ -304,7 +304,7 @@ with tab_cv:
         st.markdown("##### Eliminar registro")
         with st.form("form_cv_del", clear_on_submit=True):
             mes_del = st.selectbox("Periodo a eliminar", list(MESES_OPTS.keys()), key="cv_del_mes")
-            soc_del = st.radio("Sociedad", ["ACUNA", "GRAN_NATURAL"],
+            soc_del = st.radio("Sociedad", ["ACUÑA", "GRAN_NATURAL"],
                                horizontal=True, key="cv_del_soc")
             del_btn = st.form_submit_button("Eliminar de staging", type="secondary",
                                             use_container_width=True)

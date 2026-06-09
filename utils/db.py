@@ -42,3 +42,38 @@ def execute(sql: str, params: dict = None) -> None:
         conn.execute(text(sql), params or {})
     # Limpiar caché tras escritura para que la próxima lectura sea fresca
     query.clear()
+
+
+def guardar_reporte(
+    titulo: str,
+    tipo: str,
+    periodo_desde: str,
+    periodo_hasta: str,
+    sociedad: str,
+    datos: dict,
+    analisis: str,
+    creado_por: str,
+) -> None:
+    """Inserta un análisis IA en reports.reportes_guardados.
+    Helper único usado por EERR, Centro de Costos, Control Cuentas y Riesgos.
+    tipo: 'EERR' | 'CC' | 'CUENTAS' | 'RIESGOS'
+    """
+    import json
+    with get_engine().begin() as conn:
+        conn.execute(text("""
+            INSERT INTO reports.reportes_guardados
+                (titulo, tipo, periodo_desde, periodo_hasta,
+                 sociedad, datos_json, analisis_ia, creado_por)
+            VALUES
+                (:titulo, :tipo, :pdesde, :phasta,
+                 :sociedad, :datos, :analisis, :usuario)
+        """), {
+            "titulo":   titulo,
+            "tipo":     tipo,
+            "pdesde":   periodo_desde,
+            "phasta":   periodo_hasta,
+            "sociedad": sociedad,
+            "datos":    json.dumps(datos),
+            "analisis": analisis,
+            "usuario":  creado_por,
+        })

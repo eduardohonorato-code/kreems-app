@@ -7,7 +7,7 @@ from datetime import date
 from sqlalchemy import text
 from utils.auth import login, get_cc_filter, requiere_acceso_total
 from utils.db import query, get_engine
-from utils.components import header, sidebar_kreems, boton_excel, ANO_FISCAL
+from utils.components import header, sidebar_kreems, boton_excel, ANO_FISCAL, NOMBRES_CC as CC_NOMBRES
 
 st.set_page_config(page_title="Presupuesto Mensual · Kreems", page_icon="💜", layout="wide")
 
@@ -21,14 +21,8 @@ header("Presupuesto Mensualizado")
 _ANO = ANO_FISCAL
 es_admin = st.session_state.get("rol") == "admin"
 
-_TODOS_CC = {
-    "CC-01": "Administración",
-    "CC-02": "Comercial",
-    "CC-03": "Distribución",
-    "CC-04": "Producción",
-}
 _cc_permitidos = get_cc_filter()
-NOMBRES_CC = {k: v for k, v in _TODOS_CC.items()
+NOMBRES_CC = {k: v for k, v in CC_NOMBRES.items()
               if _cc_permitidos is None or k in _cc_permitidos}
 MESES_COLS = {
     f"{_ANO}-{m:02d}": nom for m, nom in [
@@ -210,6 +204,7 @@ for tab_idx, (codigo_cc, nombre_cc) in enumerate(NOMBRES_CC.items()):
                     else:
                         st.success(f"✓ {n_cambios} valores actualizados.")
                         cargar_presupuesto.clear()
+                        query.clear()  # limpiar también la caché interna de query()
                         st.rerun()
             with col_export:
                 boton_excel(
