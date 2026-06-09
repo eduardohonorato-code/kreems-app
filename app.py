@@ -85,6 +85,11 @@ if st.session_state.get("rol") == "admin":
         "pages/14_presupuesto_detalle.py",
     ))
     cards.append((
+        "📈", "Ppto Ventas & CV",
+        "Edita ventas y costo variable presupuestados por categoría. Reagrega a las cuentas del P&L.",
+        "pages/15_presupuesto_ventas_cv.py",
+    ))
+    cards.append((
         "👤", "Admin Usuarios",
         "Gestiona los usuarios de la app: crear, editar, cambiar contraseña y eliminar.",
         "pages/7_admin_usuarios.py",
