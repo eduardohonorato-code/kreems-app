@@ -51,8 +51,8 @@ _cards_base = [
 
 # Páginas solo para usuarios sin restricción de CC (acceso total)
 _cards_full = [
-    ("📋", "Estado de Resultados",
-     "P&L completo: Ventas, Costo Variable, Costo Fijo, OPEX, EBIT y Utilidad Neta.",
+    ("📋", "EERR vs Presupuesto",
+     "P&L completo Real vs Presupuesto: Ventas, Costo Variable, Costo Fijo, OPEX, EBIT y Utilidad Neta.",
      "pages/2_eerr.py"),
     ("📈", "EERR Acumulado",
      "P&L con progresión acumulada mes a mes (YTD), gráfico de evolución y análisis IA.",

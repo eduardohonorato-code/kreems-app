@@ -460,7 +460,7 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
         _nav_section("Reportes")
         st.page_link("app.py",                      label="🏠  Inicio",                   use_container_width=True)
         st.page_link("pages/1_dashboard.py",        label="📊  Resumen Ejecutivo",         use_container_width=True)
-        st.page_link("pages/2_eerr.py",             label="📋  Estado de Resultados",      use_container_width=True)
+        st.page_link("pages/2_eerr.py",             label="📋  EERR vs Presupuesto",       use_container_width=True)
         st.page_link("pages/12_eerr_acumulado.py",  label="📈  EERR Acumulado",            use_container_width=True)
         st.page_link("pages/13_eerr_mensual.py",    label="📅  EERR Mensual & Análisis",   use_container_width=True)
         st.page_link("pages/3_centro_costos.py",    label="🏢  Centro de Costos",          use_container_width=True)

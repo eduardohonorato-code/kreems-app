@@ -17,14 +17,14 @@ from utils.pdf_report import generar_pdf_eerr
 
 _ANO = date.today().year
 
-st.set_page_config(page_title="Estado de Resultados · Kreems", page_icon="💜", layout="wide")
+st.set_page_config(page_title="EERR vs Presupuesto · Kreems", page_icon="💜", layout="wide")
 
 if not login():
     st.stop()
 requiere_acceso_total()
 
 sociedad_sel, _ = sidebar_kreems(mostrar_sociedad=True)
-header(f"Estado de Resultados — Real vs Presupuesto {_ANO}")
+header(f"EERR Real vs Presupuesto {_ANO}")
 periodo_desde, periodo_hasta = selector_meses(key="eerr")
 st.markdown("<br>", unsafe_allow_html=True)
 
