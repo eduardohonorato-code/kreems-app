@@ -5,8 +5,11 @@ Conexión a Supabase PostgreSQL.
 - query_live:  consultas sin caché (para datos que deben ser siempre frescos).
 - execute:     DML sin caché (INSERT/UPDATE/DELETE).
 """
+import time
+
 import streamlit as st
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 import pandas as pd
 
 
@@ -17,22 +20,57 @@ def get_engine():
         f"postgresql+psycopg2://{cfg['user']}:{cfg['password']}"
         f"@{cfg['host']}:{cfg['port']}/{cfg['dbname']}"
     )
-    return create_engine(url, pool_pre_ping=True)
+    # El pooler de Supabase en modo sesión admite pocos clientes simultáneos:
+    # pool chico, reciclado antes de que el pooler corte conexiones inactivas.
+    return create_engine(
+        url,
+        pool_pre_ping=True,
+        pool_size=2,
+        max_overflow=3,
+        pool_recycle=240,
+        connect_args={
+            "connect_timeout": 10,
+            "sslmode": "require",
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 3,
+        },
+    )
+
+
+def _read_sql_con_reintentos(sql: str, params: dict, intentos: int = 3) -> pd.DataFrame:
+    """Lee de la BD reintentando ante fallas de conexión (pooler saturado
+    o proyecto Supabase pausado que tarda en despertar)."""
+    for intento in range(intentos):
+        engine = get_engine()
+        try:
+            with engine.connect() as conn:
+                return pd.read_sql(text(sql), conn, params=params)
+        except OperationalError:
+            # Descartar el engine cacheado: sus conexiones pueden estar muertas
+            engine.dispose()
+            get_engine.clear()
+            if intento == intentos - 1:
+                st.error(
+                    "⚠ No se pudo conectar a la base de datos (Supabase). "
+                    "Reintenta en unos segundos. Si persiste, revisa que el "
+                    "proyecto Supabase no esté pausado y que los Secrets de "
+                    "Streamlit Cloud usen el host del pooler."
+                )
+                st.stop()
+            time.sleep(2 ** intento)
 
 
 @st.cache_data(ttl=300, show_spinner=False)
 def query(sql: str, params: dict = None) -> pd.DataFrame:
     """Ejecuta una consulta SELECT y cachea el resultado 5 minutos."""
-    engine = get_engine()
-    with engine.connect() as conn:
-        return pd.read_sql(text(sql), conn, params=params)
+    return _read_sql_con_reintentos(sql, params)
 
 
 def query_live(sql: str, params: dict = None) -> pd.DataFrame:
     """Consulta sin caché — usar solo cuando se necesitan datos al instante."""
-    engine = get_engine()
-    with engine.connect() as conn:
-        return pd.read_sql(text(sql), conn, params=params)
+    return _read_sql_con_reintentos(sql, params)
 
 
 def execute(sql: str, params: dict = None) -> None:
