@@ -11,7 +11,7 @@ from utils.auth import login, get_cc_sql_filter, requiere_acceso_total
 from utils.db import query, guardar_reporte
 from utils.components import (
     header, sidebar_kreems, fmt_mill, boton_excel, boton_excel_eerr_secciones,
-    get_soc_sql_filter, MESES, MES_NUM_ACTUAL,
+    get_soc_sql_filter, ETIQUETA_SOCIEDAD, MESES, MES_NUM_ACTUAL,
 )
 from utils.ai import generar_analisis_eerr_acumulado
 
@@ -220,16 +220,17 @@ with st.container(border=True):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# ── EXPORTAR EERR REAL POR CUENTA × CENTRO DE COSTO (una hoja por mes) ─
+# ── EXPORTAR EERR REAL (Excel) ────────────────────────────────
 with st.container(border=True):
-    st.markdown("##### 📤 Exportar EERR Real — Cuenta Contable × Centro de Costo")
+    st.markdown("##### 📤 Exportar EERR Real (Excel)")
     st.caption(
-        "Excel con **una hoja por mes** (Enero al mes seleccionado). Cada hoja lista "
-        "las cuentas contables en las filas y los centros de costo en las columnas, "
-        "separadas en secciones **Ingresos** y **Gastos** con sus totales."
+        f"Sociedad: **{ETIQUETA_SOCIEDAD.get(sociedad_sel, sociedad_sel)}** · "
+        f"periodo Enero–{mes_hasta_nom} {_ANO}. La primera hoja muestra las cuentas "
+        "con los **meses en las columnas**; luego una hoja por mes con el desglose por "
+        "**centro de costo**. Todo separado en secciones Ingresos y Gastos."
     )
 
-    # Detalle Real por cuenta × CC × periodo (todas las cuentas activas)
+    # Detalle Real por cuenta × CC × periodo (respeta filtros de sociedad y CC)
     df_cc = query(f"""
         SELECT periodo, codigo_cuenta, nombre_cuenta, clasificacion,
                codigo_cc, nombre_cc, SUM(valor_real) AS real
@@ -242,16 +243,26 @@ with st.container(border=True):
     if df_cc.empty:
         st.info("Sin datos reales para exportar con los filtros actuales.")
     else:
-        # Columnas = centros de costo (orden por código, etiqueta = nombre)
+        # Centros de costo disponibles (orden por código, etiqueta = nombre)
         _cc = (df_cc[["codigo_cc", "nombre_cc"]].drop_duplicates()
                .sort_values("codigo_cc"))
         _cc_cod    = list(_cc["codigo_cc"])
         _cc_label  = {r.codigo_cc: (r.nombre_cc or r.codigo_cc)
                       for r in _cc.itertuples()}
 
+        # Selector de centro de costo para la hoja mensual (aislar p.ej. Producción)
+        _cc_opts = ["__TODOS__"] + _cc_cod
+        cc_scope = st.radio(
+            "Centro de costo (hoja mensual)",
+            _cc_opts,
+            format_func=lambda c: "Todos (consolidado)" if c == "__TODOS__"
+            else _cc_label[c],
+            horizontal=True,
+        )
+
         # Filas = plan de cuentas completo (todas las activas), orden por código.
-        # Se usa la plantilla completa para que cada mes tenga las mismas líneas,
-        # incluidas cuentas en cero (igual que el formato de referencia).
+        # Plantilla fija: cada hoja tiene las mismas líneas, incluidas las que
+        # quedan en cero (igual que el formato de referencia).
         _ctas = query("""
             SELECT codigo_cuenta,
                    codigo_cuenta || ' ' || COALESCE(nombre_cuenta, '') AS etiqueta,
@@ -262,8 +273,9 @@ with st.container(border=True):
         """)
         _ing = _ctas[_ctas["clasificacion"] == "INGRESO"]
         _gas = _ctas[_ctas["clasificacion"] != "INGRESO"]
+        _MESES_EXP = list(range(1, mes_hasta_num + 1))
 
-        def _matriz(periodo: str, sub_ctas: pd.DataFrame) -> pd.DataFrame:
+        def _matriz_cc(periodo: str, sub_ctas: pd.DataFrame) -> pd.DataFrame:
             """Matriz cuenta (filas) × CC (columnas) + Total para un mes."""
             piv = (df_cc[df_cc["periodo"] == periodo]
                    .pivot_table(index="codigo_cuenta", columns="codigo_cc",
@@ -272,33 +284,61 @@ with st.container(border=True):
             for r in sub_ctas.itertuples():
                 fila = {"Cuenta": r.etiqueta}
                 for cc in _cc_cod:
-                    val = (float(piv.loc[r.codigo_cuenta, cc])
-                           if (r.codigo_cuenta in piv.index and cc in piv.columns)
-                           else 0.0)
-                    fila[_cc_label[cc]] = val
+                    fila[_cc_label[cc]] = (
+                        float(piv.loc[r.codigo_cuenta, cc])
+                        if (r.codigo_cuenta in piv.index and cc in piv.columns)
+                        else 0.0)
                 fila["Total"] = sum(fila[_cc_label[cc]] for cc in _cc_cod)
                 rows.append(fila)
             return pd.DataFrame(rows)
 
-        # Una hoja por mes con datos (Ene..mes seleccionado)
-        hojas = {}
-        for m in range(1, mes_hasta_num + 1):
-            per = f"{_ANO}-{m:02d}"
-            if not (df_cc["periodo"] == per).any():
-                continue  # omitir meses sin ningún movimiento
-            hojas[_ABREV[m]] = [
-                {"titulo": "Ingresos", "df": _matriz(per, _ing)},
-                {"titulo": "Gastos",   "df": _matriz(per, _gas)},
-            ]
+        def _matriz_meses(sub_ctas: pd.DataFrame) -> pd.DataFrame:
+            """Matriz cuenta (filas) × mes (columnas) + Total, según cc_scope."""
+            base = df_cc if cc_scope == "__TODOS__" else df_cc[df_cc["codigo_cc"] == cc_scope]
+            piv = base.pivot_table(index="codigo_cuenta", columns="periodo",
+                                   values="real", aggfunc="sum", fill_value=0.0)
+            rows = []
+            for r in sub_ctas.itertuples():
+                fila = {"Cuenta": r.etiqueta}
+                for m in _MESES_EXP:
+                    per = f"{_ANO}-{m:02d}"
+                    fila[_ABREV[m]] = (
+                        float(piv.loc[r.codigo_cuenta, per])
+                        if (r.codigo_cuenta in piv.index and per in piv.columns)
+                        else 0.0)
+                fila["Total"] = sum(fila[_ABREV[m]] for m in _MESES_EXP)
+                rows.append(fila)
+            return pd.DataFrame(rows)
 
-        if not hojas:
-            st.info("Sin movimientos reales en el periodo seleccionado.")
-        else:
-            boton_excel_eerr_secciones(
-                hojas,
-                f"EERR_Real_Cuenta_CC_{periodo_hasta}",
-                label="⬇ Exportar EERR Real Cuenta × CC (Excel)",
-            )
+        # Hoja 1: meses en columnas (consolidado o del CC elegido)
+        _suf_cc = "" if cc_scope == "__TODOS__" else f" · {_cc_label[cc_scope]}"
+        hoja_mensual = f"Mensual Ene-{_ABREV[mes_hasta_num]}"[:31]
+        hojas = {
+            hoja_mensual: [
+                {"titulo": "Ingresos", "df": _matriz_meses(_ing)},
+                {"titulo": "Gastos",   "df": _matriz_meses(_gas)},
+            ]
+        }
+
+        # Hojas por mes con desglose por CC (solo en modo consolidado; si se
+        # aísla un CC, la hoja mensual ya es específica y el desglose sobra)
+        if cc_scope == "__TODOS__":
+            for m in _MESES_EXP:
+                per = f"{_ANO}-{m:02d}"
+                if not (df_cc["periodo"] == per).any():
+                    continue  # omitir meses sin movimiento
+                hojas[_ABREV[m]] = [
+                    {"titulo": "Ingresos", "df": _matriz_cc(per, _ing)},
+                    {"titulo": "Gastos",   "df": _matriz_cc(per, _gas)},
+                ]
+
+        _tag_soc = "Consolidado" if sociedad_sel == "Todas" else sociedad_sel.replace("Ñ", "N")
+        _tag_cc  = "" if cc_scope == "__TODOS__" else f"_{_cc_label[cc_scope]}"
+        boton_excel_eerr_secciones(
+            hojas,
+            f"EERR_Real_{_tag_soc}{_tag_cc}_{periodo_hasta}",
+            label="⬇ Exportar EERR Real (Excel)",
+        )
 
 st.markdown("<br>", unsafe_allow_html=True)
 

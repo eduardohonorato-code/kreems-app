@@ -240,6 +240,13 @@ SOC_ACUNA        = "ACUÑA"
 SOC_GRAN_NATURAL = "GRAN_NATURAL"
 SOCIEDADES       = [SOC_GRAN_NATURAL, SOC_ACUNA]
 OPCIONES_SOCIEDAD = ["Todas"] + SOCIEDADES
+# Etiqueta visible del selector. El valor interno sigue siendo "Todas"
+# (usado por get_soc_sql_filter y reportes guardados); solo cambia el display.
+ETIQUETA_SOCIEDAD = {
+    "Todas": "Consolidado (ambas)",
+    SOC_GRAN_NATURAL: "Gran Natural",
+    SOC_ACUNA: "ACUÑA",
+}
 
 # Mapa código CC → nombre. Único lugar donde se define.
 NOMBRES_CC = {
@@ -493,6 +500,7 @@ def sidebar_kreems(mostrar_sociedad: bool = True, mostrar_cc: bool = False):
             sociedad_sel = st.radio(
                 "sociedad",
                 OPCIONES_SOCIEDAD,
+                format_func=lambda s: ETIQUETA_SOCIEDAD.get(s, s),
                 label_visibility="collapsed"
             )
 
