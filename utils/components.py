@@ -765,3 +765,100 @@ def boton_excel_pct(frames: dict, nombre_archivo: str,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=False,
     )
+
+
+def eerr_secciones_excel_bytes(hojas: dict) -> bytes:
+    """
+    Exporta un EERR con secciones (Ingresos / Gastos) por hoja, en formato
+    cuenta contable (filas) × centro de costo (columnas).
+
+    Args:
+        hojas: dict nombre_hoja → lista de secciones. Cada sección es un dict:
+               {"titulo": str, "df": DataFrame}, donde df tiene la primera
+               columna con la etiqueta de cuenta y el resto columnas numéricas
+               (CC + Total). Por cada sección se escribe: fila de título, fila
+               de encabezados, filas de cuentas y una fila "Total <título>".
+    Returns:
+        bytes del archivo .xlsx
+    """
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    f_titulo = Font(bold=True, size=12, color="2D0050")
+    f_header = Font(bold=True, color="FFFFFF")
+    f_total  = Font(bold=True, color="2D0050")
+    fill_header = PatternFill("solid", fgColor="6B2C91")
+    fill_total  = PatternFill("solid", fgColor="F3E9F7")
+    borde = Border(bottom=Side(style="thin", color="D9C7E6"))
+    num_fmt = "#,##0"
+
+    for nombre_hoja, secciones in hojas.items():
+        ws = wb.create_sheet(title=nombre_hoja[:31])
+        r = 1
+        n_cols = 1
+        for sec in secciones:
+            df = sec["df"]
+            cols = list(df.columns)
+            n_cols = max(n_cols, len(cols))
+
+            # Fila de título de sección
+            ws.cell(row=r, column=1, value=sec["titulo"]).font = f_titulo
+            r += 1
+
+            # Fila de encabezados
+            for j, col in enumerate(cols, start=1):
+                cell = ws.cell(row=r, column=j, value=col)
+                cell.font = f_header
+                cell.fill = fill_header
+                cell.alignment = Alignment(
+                    horizontal="left" if j == 1 else "right")
+            r += 1
+
+            # Filas de cuentas
+            for _, fila in df.iterrows():
+                for j, col in enumerate(cols, start=1):
+                    cell = ws.cell(row=r, column=j, value=fila[col])
+                    cell.border = borde
+                    if j > 1:
+                        cell.number_format = num_fmt
+                r += 1
+
+            # Fila de total de la sección
+            total_row = {cols[0]: f"Total {sec['titulo']}"}
+            for col in cols[1:]:
+                total_row[col] = float(df[col].sum())
+            for j, col in enumerate(cols, start=1):
+                cell = ws.cell(row=r, column=j, value=total_row[col])
+                cell.font = f_total
+                cell.fill = fill_total
+                if j > 1:
+                    cell.number_format = num_fmt
+            r += 2  # línea en blanco entre secciones
+
+        # Anchos de columna
+        ws.column_dimensions["A"].width = 42
+        for j in range(2, n_cols + 1):
+            ws.column_dimensions[get_column_letter(j)].width = 16
+        ws.freeze_panes = "B1"
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def boton_excel_eerr_secciones(hojas: dict, nombre_archivo: str,
+                               label: str = "⬇ Exportar Excel"):
+    """download_button para el EERR por cuenta × CC con secciones Ingresos/Gastos."""
+    datos = eerr_secciones_excel_bytes(hojas)
+    st.download_button(
+        label=label,
+        data=datos,
+        file_name=f"{nombre_archivo}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=False,
+    )
