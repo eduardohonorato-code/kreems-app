@@ -310,14 +310,23 @@ with st.container(border=True):
                 rows.append(fila)
             return pd.DataFrame(rows)
 
+        # Encabezado del documento: sociedad + periodo + alcance CC
+        _soc_lbl = ETIQUETA_SOCIEDAD.get(sociedad_sel, sociedad_sel)
+        _periodo_lbl = f"Enero–{mes_hasta_nom} {_ANO}"
+        _cc_lbl = ("Todos los centros de costo" if cc_scope == "__TODOS__"
+                   else f"Centro de costo: {_cc_label[cc_scope]}")
+
         # Hoja 1: meses en columnas (consolidado o del CC elegido)
-        _suf_cc = "" if cc_scope == "__TODOS__" else f" · {_cc_label[cc_scope]}"
         hoja_mensual = f"Mensual Ene-{_ABREV[mes_hasta_num]}"[:31]
         hojas = {
-            hoja_mensual: [
-                {"titulo": "Ingresos", "df": _matriz_meses(_ing)},
-                {"titulo": "Gastos",   "df": _matriz_meses(_gas)},
-            ]
+            hoja_mensual: {
+                "titulo": f"EERR Real — {_soc_lbl}",
+                "subtitulo": f"{_periodo_lbl} · Meses en columnas · {_cc_lbl}",
+                "secciones": [
+                    {"titulo": "Ingresos", "df": _matriz_meses(_ing)},
+                    {"titulo": "Gastos",   "df": _matriz_meses(_gas)},
+                ],
+            }
         }
 
         # Hojas por mes con desglose por CC (solo en modo consolidado; si se
@@ -327,10 +336,14 @@ with st.container(border=True):
                 per = f"{_ANO}-{m:02d}"
                 if not (df_cc["periodo"] == per).any():
                     continue  # omitir meses sin movimiento
-                hojas[_ABREV[m]] = [
-                    {"titulo": "Ingresos", "df": _matriz_cc(per, _ing)},
-                    {"titulo": "Gastos",   "df": _matriz_cc(per, _gas)},
-                ]
+                hojas[_ABREV[m]] = {
+                    "titulo": f"EERR Real — {_soc_lbl}",
+                    "subtitulo": f"{MESES[m]} {_ANO} · Desglose por centro de costo",
+                    "secciones": [
+                        {"titulo": "Ingresos", "df": _matriz_cc(per, _ing)},
+                        {"titulo": "Gastos",   "df": _matriz_cc(per, _gas)},
+                    ],
+                }
 
         _tag_soc = "Consolidado" if sociedad_sel == "Todas" else sociedad_sel.replace("Ñ", "N")
         _tag_cc  = "" if cc_scope == "__TODOS__" else f"_{_cc_label[cc_scope]}"

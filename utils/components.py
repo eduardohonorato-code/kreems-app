@@ -781,11 +781,15 @@ def eerr_secciones_excel_bytes(hojas: dict) -> bytes:
     cuenta contable (filas) × centro de costo (columnas).
 
     Args:
-        hojas: dict nombre_hoja → lista de secciones. Cada sección es un dict:
-               {"titulo": str, "df": DataFrame}, donde df tiene la primera
-               columna con la etiqueta de cuenta y el resto columnas numéricas
-               (CC + Total). Por cada sección se escribe: fila de título, fila
-               de encabezados, filas de cuentas y una fila "Total <título>".
+        hojas: dict nombre_hoja → contenido. El contenido puede ser:
+               - una lista de secciones, o
+               - un dict {"titulo": str, "subtitulo": str, "secciones": lista}
+                 donde titulo/subtitulo son opcionales y se escriben como
+                 encabezado de la hoja.
+               Cada sección es un dict {"titulo": str, "df": DataFrame}, donde
+               df tiene la primera columna con la etiqueta de cuenta y el resto
+               columnas numéricas. Por cada sección se escribe: fila de título,
+               fila de encabezados, filas de cuentas y una fila "Total <título>".
     Returns:
         bytes del archivo .xlsx
     """
@@ -797,6 +801,8 @@ def eerr_secciones_excel_bytes(hojas: dict) -> bytes:
     wb = Workbook()
     wb.remove(wb.active)
 
+    f_doc_tit = Font(bold=True, size=14, color="2D0050")
+    f_doc_sub = Font(size=11, italic=True, color="6B2C91")
     f_titulo = Font(bold=True, size=12, color="2D0050")
     f_header = Font(bold=True, color="FFFFFF")
     f_total  = Font(bold=True, color="2D0050")
@@ -805,10 +811,29 @@ def eerr_secciones_excel_bytes(hojas: dict) -> bytes:
     borde = Border(bottom=Side(style="thin", color="D9C7E6"))
     num_fmt = "#,##0"
 
-    for nombre_hoja, secciones in hojas.items():
+    for nombre_hoja, contenido in hojas.items():
+        if isinstance(contenido, dict):
+            doc_titulo = contenido.get("titulo")
+            doc_subtitulo = contenido.get("subtitulo")
+            secciones = contenido["secciones"]
+        else:
+            doc_titulo = doc_subtitulo = None
+            secciones = contenido
+
         ws = wb.create_sheet(title=nombre_hoja[:31])
         r = 1
         n_cols = 1
+
+        # Encabezado de la hoja (título / subtítulo)
+        if doc_titulo:
+            ws.cell(row=r, column=1, value=doc_titulo).font = f_doc_tit
+            r += 1
+        if doc_subtitulo:
+            ws.cell(row=r, column=1, value=doc_subtitulo).font = f_doc_sub
+            r += 1
+        if doc_titulo or doc_subtitulo:
+            r += 1  # línea en blanco tras el encabezado
+
         for sec in secciones:
             df = sec["df"]
             cols = list(df.columns)
