@@ -11,7 +11,7 @@ from utils.auth import login, get_cc_sql_filter, requiere_acceso_total
 from utils.db import query, guardar_reporte
 from utils.components import (
     header, sidebar_kreems, fmt_mill, boton_excel, boton_excel_pct,
-    get_soc_sql_filter, MESES, MES_NUM_ACTUAL,
+    get_soc_sql_filter, ETIQUETA_SOCIEDAD, MESES, MES_NUM_ACTUAL,
 )
 from utils.ai import generar_analisis_estructural
 
@@ -103,8 +103,9 @@ st.caption(
     f"Valores **reales del mes** (no acumulados), sin presupuesto · {sociedad_sel} · Enero–{mes_hasta_nom}"
 )
 
-tab_mes, tab_vert, tab_horiz, tab_ia = st.tabs([
+tab_mes, tab_cuenta, tab_vert, tab_horiz, tab_ia = st.tabs([
     "📅  Mes a Mes (Real)",
+    "📒  Mes a Mes por Cuenta",
     "📊  Análisis Vertical",
     "↔️  Análisis Horizontal",
     "🤖  Análisis IA (CFO)",
@@ -167,7 +168,120 @@ with tab_mes:
     st.plotly_chart(fig, use_container_width=True)
 
 # ╔══════════════════════════════════════════╗
-# ║  TAB 2 — ANÁLISIS VERTICAL               ║
+# ║  TAB 2 — MES A MES POR CUENTA CONTABLE   ║
+# ╚══════════════════════════════════════════╝
+with tab_cuenta:
+    st.markdown("##### Estado de Resultados mes a mes por Cuenta Contable (Real)")
+    st.caption(
+        f"Mismo detalle mensual, abierto por **cuenta contable** y agrupado por línea "
+        f"del EERR · {ETIQUETA_SOCIEDAD.get(sociedad_sel, sociedad_sel)} · "
+        f"Enero–{mes_hasta_nom}. Elige **Consolidado** en la barra lateral para ver "
+        "ambas sociedades."
+    )
+
+    df_ctas = query(f"""
+        SELECT periodo, codigo_cuenta, nombre_cuenta, clasificacion,
+               SUM(valor_real) AS real
+        FROM marts.vw_real_vs_ppto
+        WHERE periodo BETWEEN :desde AND :hasta {filtro_soc} {filtro_cc}
+        GROUP BY periodo, codigo_cuenta, nombre_cuenta, clasificacion
+    """, {"desde": periodo_desde, "hasta": periodo_hasta})
+
+    if df_ctas.empty:
+        st.info("Sin datos para el periodo y filtros seleccionados.")
+    else:
+        df_ctas["Cuenta"] = (df_ctas["codigo_cuenta"] + " "
+                             + df_ctas["nombre_cuenta"].fillna(""))
+        piv_c = df_ctas.pivot_table(
+            index=["clasificacion", "codigo_cuenta", "Cuenta"],
+            columns="periodo", values="real", aggfunc="sum", fill_value=0.0)
+
+        def _serie_idx(idx) -> list:
+            return [float(piv_c.loc[idx, p]) if p in piv_c.columns else 0.0
+                    for p in _PERIODOS]
+
+        # Orden P&L: clasificación → (etiqueta del subtotal). Las claves "__"
+        # son subtotales derivados (diferencias, no suma de cuentas).
+        _GRUPOS = [
+            ("INGRESO",        "Ventas"),
+            ("COSTO_VAR",      "Costo de Venta"),
+            ("__UB__",         "Utilidad Bruta"),
+            ("COSTO_FIJO",     "Costo Fijo"),
+            ("OPEX",           "OPEX"),
+            ("__EBIT__",       "EBIT"),
+            ("FINANCIERO",     "Gastos Financieros"),
+            ("NO_OPERACIONAL", "Gastos No Operacionales"),
+            ("__UN__",         "Utilidad Neta"),
+        ]
+
+        _z = [0.0] * _n
+        cat, filas, sub_idx = {}, [], []
+
+        def _add_fila(etiqueta, serie, es_sub):
+            fila = {"Cuenta": etiqueta}
+            for lbl, val in zip(_COL_LABELS, serie):
+                fila[lbl] = val
+            fila["Total YTD"] = sum(serie)
+            if es_sub:
+                sub_idx.append(len(filas))
+            filas.append(fila)
+
+        for clasif, label in _GRUPOS:
+            if clasif == "__UB__":
+                serie = [cat.get("INGRESO", _z)[i] - cat.get("COSTO_VAR", _z)[i]
+                         for i in range(_n)]
+                _add_fila(label, serie, True)
+            elif clasif == "__EBIT__":
+                ub = [cat.get("INGRESO", _z)[i] - cat.get("COSTO_VAR", _z)[i]
+                      for i in range(_n)]
+                serie = [ub[i] - cat.get("COSTO_FIJO", _z)[i] - cat.get("OPEX", _z)[i]
+                         for i in range(_n)]
+                _add_fila(label, serie, True)
+            elif clasif == "__UN__":
+                ub = [cat.get("INGRESO", _z)[i] - cat.get("COSTO_VAR", _z)[i]
+                      for i in range(_n)]
+                ebit = [ub[i] - cat.get("COSTO_FIJO", _z)[i] - cat.get("OPEX", _z)[i]
+                        for i in range(_n)]
+                serie = [ebit[i] - cat.get("FINANCIERO", _z)[i]
+                         - cat.get("NO_OPERACIONAL", _z)[i] for i in range(_n)]
+                _add_fila(label, serie, True)
+            else:
+                # Cuentas de la clasificación (orden por código), omitiendo las
+                # que quedan en cero todo el periodo
+                sub = piv_c[piv_c.index.get_level_values("clasificacion") == clasif]
+                acc_sum = list(_z)
+                for idx in sub.sort_index().index:
+                    serie = _serie_idx(idx)
+                    acc_sum = [acc_sum[i] + serie[i] for i in range(_n)]
+                    if sum(serie) != 0:
+                        _add_fila(idx[2], serie, False)  # idx[2] = etiqueta Cuenta
+                cat[clasif] = acc_sum
+                _add_fila(label, acc_sum, True)  # subtotal de la línea
+
+        df_cuenta = pd.DataFrame(filas)
+        _cols_num_c = _COL_LABELS + ["Total YTD"]
+
+        col_tc, col_ec = st.columns([4, 1])
+        with col_tc:
+            st.markdown("##### Detalle por cuenta contable")
+        with col_ec:
+            boton_excel({"EERR Mensual x Cuenta": df_cuenta},
+                        f"EERR_Mensual_Cuenta_{periodo_hasta}")
+
+        def _estilo_sub_c(row):
+            if row.name in sub_idx:
+                return ["font-weight:bold; background:#fdf5fb; color:#2d0050"] * len(row)
+            return [""] * len(row)
+
+        st.dataframe(
+            df_cuenta.style
+                .format({c: (lambda v: fmt_mill(v)) for c in _cols_num_c})
+                .apply(_estilo_sub_c, axis=1),
+            use_container_width=True, hide_index=True, height=560,
+        )
+
+# ╔══════════════════════════════════════════╗
+# ║  TAB 3 — ANÁLISIS VERTICAL               ║
 # ╚══════════════════════════════════════════╝
 with tab_vert:
     st.markdown("##### Análisis Vertical — cada línea como % de las Ventas")
