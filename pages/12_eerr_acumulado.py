@@ -220,6 +220,83 @@ with st.container(border=True):
 
 st.markdown("<br>", unsafe_allow_html=True)
 
+# ── EXPORTAR DETALLE POR CUENTA Y CENTRO DE COSTO ─────────────
+with st.container(border=True):
+    st.markdown("##### 📤 Exportar EERR — Detalle por Cuenta Contable y Centro de Costo")
+    st.caption(
+        "Excel con 3 hojas al máximo detalle (cuenta contable × centro de costo): "
+        "**Real** mes a mes, **Presupuesto** mes a mes, y comparación **acumulada YTD** "
+        "con varianza y % de ejecución."
+    )
+
+    df_det = query(f"""
+        SELECT periodo, clasificacion, categoria_eerr,
+               codigo_cuenta, nombre_cuenta, codigo_cc, nombre_cc,
+               SUM(valor_real) AS real, SUM(valor_ppto) AS ppto
+        FROM marts.vw_real_vs_ppto
+        WHERE periodo BETWEEN :d AND :h {filtro_soc} {filtro_cc}
+        GROUP BY periodo, clasificacion, categoria_eerr,
+                 codigo_cuenta, nombre_cuenta, codigo_cc, nombre_cc
+    """, {"d": f"{_ANO}-01", "h": f"{_ANO}-12"})
+
+    if df_det.empty:
+        st.info("Sin datos para exportar con los filtros actuales.")
+    else:
+        _DIMS = ["Clasificación", "Categoría EERR", "Código Cuenta",
+                 "Cuenta", "CC", "Centro de Costo"]
+        df_det = df_det.rename(columns={
+            "clasificacion": "Clasificación", "categoria_eerr": "Categoría EERR",
+            "codigo_cuenta": "Código Cuenta", "nombre_cuenta": "Cuenta",
+            "codigo_cc": "CC", "nombre_cc": "Centro de Costo",
+        })
+        # Dimensiones nulas (ej. cuenta sin categoría en dim_cuentas) no deben
+        # botar filas del pivot: se rellenan para que el export siempre cuadre
+        df_det[_DIMS] = df_det[_DIMS].astype(object).fillna("(sin asignar)")
+        # Orden P&L: clasificaciones en el orden del estado de resultados
+        df_det["Clasificación"] = pd.Categorical(
+            df_det["Clasificación"],
+            categories=_CLASIFS + ["(sin asignar)"], ordered=True)
+
+        def _pivot_detalle(col: str) -> pd.DataFrame:
+            """Pivotea a matriz cuenta×CC con columnas Ene..Dic + Total."""
+            piv = df_det.pivot_table(
+                index=_DIMS, columns="periodo", values=col,
+                aggfunc="sum", fill_value=0.0, observed=True,
+            )
+            piv = piv.rename(columns={
+                f"{_ANO}-{m:02d}": _ABREV[m] for m in range(1, 13)})
+            piv = piv.reindex(columns=[_ABREV[m] for m in range(1, 13)], fill_value=0.0)
+            piv["Total"] = piv.sum(axis=1)
+            piv = piv[piv["Total"] != 0]
+            return piv.sort_index().reset_index()
+
+        df_det_real = _pivot_detalle("real")
+        df_det_ppto = _pivot_detalle("ppto")
+
+        # YTD hasta el mes seleccionado: Real vs Ppto por cuenta × CC
+        df_det_ytd = (
+            df_det[df_det["periodo"] <= periodo_hasta]
+            .groupby(_DIMS, as_index=False, observed=True)[["real", "ppto"]].sum()
+            .rename(columns={"real": "Real YTD", "ppto": "Ppto YTD"})
+        )
+        df_det_ytd = df_det_ytd[
+            (df_det_ytd["Real YTD"] != 0) | (df_det_ytd["Ppto YTD"] != 0)]
+        df_det_ytd["Varianza"] = df_det_ytd["Real YTD"] - df_det_ytd["Ppto YTD"]
+        df_det_ytd["% Ejec."] = df_det_ytd.apply(
+            lambda r: round(r["Real YTD"] / r["Ppto YTD"] * 100, 1)
+            if r["Ppto YTD"] else None, axis=1)
+        df_det_ytd = df_det_ytd.sort_values(_DIMS)
+
+        boton_excel(
+            {"Real por cuenta y CC": df_det_real,
+             "Ppto por cuenta y CC": df_det_ppto,
+             f"Acum YTD a {mes_hasta_nom}": df_det_ytd},
+            f"EERR_Detalle_Cuenta_CC_{periodo_hasta}",
+            label="⬇ Exportar detalle Cuenta × CC (Excel)",
+        )
+
+st.markdown("<br>", unsafe_allow_html=True)
+
 # ── TABLA PROGRESIÓN MES A MES ────────────────────────────────
 cum_sel = cum_real if modo == "Real" else cum_ppto
 der_sel = der_real if modo == "Real" else der_ppto
