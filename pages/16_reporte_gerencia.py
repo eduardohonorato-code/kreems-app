@@ -159,6 +159,11 @@ st.markdown("<br>", unsafe_allow_html=True)
 
 # ── VISTA PREVIA ──────────────────────────────────────────────
 st.markdown(f"##### Resultado acumulado · {meta['periodo_lbl']} · {meta['sociedad']}")
+st.caption(
+    f"Facturación del periodo: {meta['mix_sociedad']}. La columna «Sociedad» de las "
+    f"tablas nombra la sociedad cuando concentra al menos el 70% del monto; si está "
+    f"repartido dice «Ambas»."
+)
 
 cols_kpi = st.columns(4)
 _kpis = [
@@ -235,7 +240,7 @@ with tab_cc:
     st.markdown("##### Gasto por centro de costo")
     df_cc = rep["cc"].copy()
     st.dataframe(
-        df_cc[["Centro de costo", "Real YTD", "Ppto YTD", "Varianza",
+        df_cc[["Centro de costo", "Sociedad", "Real YTD", "Ppto YTD", "Varianza",
                "Impacto resultado", "% Ejec.", "% Ppto Año consumido",
                "Proyección cierre"]].style
             .format({
@@ -267,7 +272,7 @@ with tab_accion:
         )
         df_ac = rep["accion"].copy()
         st.dataframe(
-            df_ac[["Centro de costo", "Cuenta", "Real YTD", "Ppto YTD",
+            df_ac[["Centro de costo", "Cuenta", "Sociedad", "Real YTD", "Ppto YTD",
                    "Impacto resultado", "% acum. brecha", "Tipo de brecha",
                    "Meses con desvío desfavorable", "Impacto anualizado"]].style
                 .format({

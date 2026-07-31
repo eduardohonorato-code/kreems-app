@@ -23,7 +23,12 @@ from datetime import datetime
 import pandas as pd
 
 from utils.db import query
-from utils.components import NOMBRES_CC
+from utils.components import (
+    NOMBRES_CC, SOC_ACUNA, SOC_GRAN_NATURAL, ETIQUETA_SOCIEDAD,
+)
+
+# Etiqueta corta de sociedad para las columnas angostas del detalle
+_SOC_CORTA = {SOC_ACUNA: "AC", SOC_GRAN_NATURAL: "GN"}
 
 # CC-00 no es un centro de costo: ahí cuelgan las ventas y el costo variable.
 # Se le pone una etiqueta explícita para que no aparezca como "Ninguno".
@@ -95,13 +100,13 @@ def cargar_movimientos(ano: int, filtro_soc: str = "", filtro_cc: str = "") -> p
     de los meses que faltan para la proyección al cierre.
     """
     return query(f"""
-        SELECT periodo, codigo_cc, nombre_cc, codigo_cuenta, nombre_cuenta,
+        SELECT periodo, sociedad, codigo_cc, nombre_cc, codigo_cuenta, nombre_cuenta,
                clasificacion, categoria_eerr,
                SUM(valor_real) AS real,
                SUM(valor_ppto) AS ppto
         FROM marts.vw_real_vs_ppto
         WHERE periodo BETWEEN :d AND :h {filtro_soc} {filtro_cc}
-        GROUP BY periodo, codigo_cc, nombre_cc, codigo_cuenta, nombre_cuenta,
+        GROUP BY periodo, sociedad, codigo_cc, nombre_cc, codigo_cuenta, nombre_cuenta,
                  clasificacion, categoria_eerr
     """, {"d": f"{ano}-01", "h": f"{ano}-12"})
 
@@ -217,6 +222,30 @@ def _clasificar_brecha(r_mes: list, p_mes: list, umbral: float) -> tuple:
     return "Mixto", mes_pico, meses_desv
 
 
+def _label_sociedad(ac: float, gn: float, umbral_dominio: float = 0.70) -> str:
+    """
+    Marca de qué sociedad viene el real: 'ACUÑA', 'Gran Natural' o 'Ambas'.
+
+    Deliberadamente sin porcentajes: la mitad de las cuentas está repartida
+    entre las dos sociedades y una columna con cifras compitiendo contra los
+    montos vuelve ilegible la tabla. Se nombra la sociedad solo cuando concentra
+    al menos el 70%; si no, 'Ambas'.
+
+    Se usa el valor absoluto para el reparto, porque hay cuentas con reversas
+    (notas de crédito) que dejarían porcentajes sin sentido con el neto.
+    """
+    ac, gn = abs(ac), abs(gn)
+    total = ac + gn
+    if total == 0:
+        return "—"
+    p_ac = ac / total
+    if p_ac >= umbral_dominio:
+        return ETIQUETA_SOCIEDAD[SOC_ACUNA]
+    if (1 - p_ac) >= umbral_dominio:
+        return ETIQUETA_SOCIEDAD[SOC_GRAN_NATURAL]
+    return "Ambas"
+
+
 def _texto_meses(pares: list) -> str:
     """
     'Ene +1,8M · Mar +2,1M' — los meses en que la cuenta se salió del
@@ -262,6 +291,26 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
     etiquetas_mes = [ABREV_MES[m] for m in meses]
     ytd = d[d["mes"] <= mes_corte]
     resto = d[d["mes"] > mes_corte]
+
+    # Reparto del real entre sociedades: el presupuesto es consolidado, pero el
+    # real se factura en una u otra según la cuenta, y saber cuál importa
+    # (ACUÑA está en quiebra y se está vaciando hacia Gran Natural).
+    def _mix(claves: list) -> pd.DataFrame:
+        piv = ytd.pivot_table(index=claves, columns="sociedad", values="real",
+                              aggfunc="sum", fill_value=0.0)
+        for soc in (SOC_ACUNA, SOC_GRAN_NATURAL):
+            if soc not in piv.columns:
+                piv[soc] = 0.0
+        return piv
+
+    mix_cta = _mix(["codigo_cc", "codigo_cuenta"])
+    mix_cc = _mix(["codigo_cc"])
+    # Para la cabecera se usa la facturación, no el real total: mezclar ventas
+    # y gastos en un mismo porcentaje no dice nada. La pregunta de gerencia es
+    # cuánto del negocio sigue facturándose en ACUÑA.
+    _vta = ytd[ytd["clasificacion"] == "INGRESO"]
+    vta_ac = float(_vta.loc[_vta["sociedad"] == SOC_ACUNA, "real"].sum())
+    vta_gn = float(_vta.loc[_vta["sociedad"] == SOC_GRAN_NATURAL, "real"].sum())
 
     # ── 1. P&L YTD por clasificación ──────────────────────────
     def _tot(frame: pd.DataFrame, clasif: str, col: str) -> float:
@@ -366,6 +415,9 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
         filas_cc.append({
             "Centro de costo": _label_cc(cc, s["nombre_cc"].iloc[0] if len(s) else cc),
             "Código": cc,
+            "Sociedad": (_label_sociedad(mix_cc.loc[cc, SOC_ACUNA],
+                                         mix_cc.loc[cc, SOC_GRAN_NATURAL])
+                         if cc in mix_cc.index else "—"),
             "Real YTD": rv,
             "Ppto YTD": pv,
             "Varianza": rv - pv,
@@ -446,6 +498,9 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
             "Centro de costo": _label_cc(cc, info["nombre_cc"]),
             "Código CC": cc,
             "Cuenta": f"{cuenta} {info['nombre_cuenta']}",
+            "Sociedad": (_label_sociedad(mix_cta.loc[idx, SOC_ACUNA],
+                                         mix_cta.loc[idx, SOC_GRAN_NATURAL])
+                         if idx in mix_cta.index else "—"),
             "Línea P&L": ETIQUETA_LINEA.get(clasif, clasif),
             "_clasif": clasif,
             "Categoría EERR": info["categoria_eerr"],
@@ -499,7 +554,7 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
     cols_var_mes = [f"Var {ABREV_MES[m]}" for m in meses]
     if not df_accion.empty:
         df_accion = df_accion[[
-            "Centro de costo", "Cuenta", "Línea P&L", "Real YTD", "Ppto YTD",
+            "Centro de costo", "Cuenta", "Sociedad", "Línea P&L", "Real YTD", "Ppto YTD",
             "Varianza", "Impacto resultado", "% acum. brecha", "Tipo de brecha",
             "Meses con desvío desfavorable", "Meses desviados", "Mes pico", "Impacto anualizado",
             *cols_var_mes,
@@ -671,9 +726,16 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
         R, P, DR, DP, PA, DPA, DPR, mes_corte, ef_volumen, ef_cv, ef_otros_ing,
         df_cc, df_det, umbral, ano, corte_parcial, diag)
 
+    _tot_soc = abs(vta_ac) + abs(vta_gn)
+    mix_lbl = (f"{ETIQUETA_SOCIEDAD[SOC_ACUNA]} {vta_ac/1e6:,.0f}M "
+               f"({abs(vta_ac)/_tot_soc*100:.0f}%) · "
+               f"{ETIQUETA_SOCIEDAD[SOC_GRAN_NATURAL]} {vta_gn/1e6:,.0f}M "
+               f"({abs(vta_gn)/_tot_soc*100:.0f}%)") if _tot_soc else "—"
+
     return {
         "meta": {
             "ano": ano, "mes_corte": mes_corte, "n_meses": mes_corte,
+            "mix_sociedad": mix_lbl,
             "mes_corte_nombre": ABREV_MES.get(mes_corte, ""),
             "periodo_lbl": f"Enero–{ABREV_MES.get(mes_corte, '')} {ano}",
             "sociedad": sociedad_lbl,
@@ -979,6 +1041,10 @@ def to_excel(rep: dict) -> bytes:
     h.seccion("Alcance")
     h.texto([f"Sociedad: {meta['sociedad']}",
              f"Periodo acumulado: {meta['periodo_lbl']} ({meta['n_meses']} de 12 meses)",
+             f"Facturación del periodo: {meta['mix_sociedad']}",
+             "El presupuesto es uno solo para el negocio. La columna «Sociedad» de las hojas "
+             "3, 4 y 5 indica dónde se registra cada línea: se nombra la sociedad cuando "
+             "concentra al menos el 70% del monto, y «Ambas» cuando está repartido.",
              f"Generado: {meta['generado']}"])
     if rep["alertas"]:
         h.seccion("Advertencias sobre la base de comparación")
@@ -1045,7 +1111,8 @@ def to_excel(rep: dict) -> bytes:
               "Run-rate x12": _FMT_M, "Desv. proyectada": _FMT_M}
     h.tabla(rep["cc"], formatos=fmt_cc, resaltar_signo=["Impacto resultado"],
             anchos={"% Ppto Año consumido": 19, "Proyección cierre": 17,
-                    "Impacto resultado": 17, "Desv. proyectada": 16})
+                    "Impacto resultado": 17, "Desv. proyectada": 16,
+                    "Sociedad": 17})
     h.seccion("Apertura por línea del P&L")
     h.tabla(rep["cc_linea"],
             formatos={"Real YTD": _FMT_M, "Ppto YTD": _FMT_M, "Varianza": _FMT_M,
@@ -1072,7 +1139,7 @@ def to_excel(rep: dict) -> bytes:
                 "Impacto anualizado": _FMT_M, "Ppto Año": _FMT_M,
                 "Proyección cierre": _FMT_M, "Meses desviados": _FMT_INT}
     _fmt_det.update({c: _FMT_M for c in rep["cols_var_mes"]})
-    _anchos_det = {"Cuenta": 40, "Línea P&L": 15, "Categoría EERR": 19,
+    _anchos_det = {"Cuenta": 40, "Sociedad": 17, "Línea P&L": 15, "Categoría EERR": 19,
                    "Tipo de brecha": 20, "Impacto anualizado": 18,
                    "Impacto resultado": 17, "Proyección cierre": 17,
                    "Meses desviados": 15, "Meses con desvío desfavorable": 42}
@@ -1094,7 +1161,8 @@ def to_excel(rep: dict) -> bytes:
                "Impacto resultado": _FMT_M, "% acum. brecha": _FMT_PCT,
                "Impacto anualizado": _FMT_M, "Meses desviados": _FMT_INT}
     _fmt_ac.update({c: _FMT_M for c in rep["cols_var_mes"]})
-    _anchos_ac = {"Cuenta": 40, "Tipo de brecha": 20, "Impacto anualizado": 18,
+    _anchos_ac = {"Cuenta": 40, "Sociedad": 17, "Tipo de brecha": 20,
+                  "Impacto anualizado": 18,
                   "Impacto resultado": 17, "Meses con desvío desfavorable": 42,
                   "Explicación (qué pasó)": 46, "Acción comprometida": 40,
                   "Responsable": 18, "Fecha": 12}
@@ -1259,7 +1327,8 @@ def to_html(rep: dict) -> str:
             filas_cc.append(f"""
             <div class="ccrow">
               <div class="ccname">{_e(r['Centro de costo'])}
-                <span class="ccsub">{_p(r['% Ppto Año consumido'])} del ppto anual</span></div>
+                <span class="ccsub">{_p(r['% Ppto Año consumido'])} del ppto anual ·
+                  {_e(r['Sociedad'])}</span></div>
               <div class="ccbars">
                 <div class="bar real" style="width:{pr:.1f}%"></div>
                 <div class="tick" style="left:{pp:.1f}%"></div>
@@ -1301,7 +1370,9 @@ def to_html(rep: dict) -> str:
             anual = float(r["Impacto anualizado"]) if pd.notna(r["Impacto anualizado"]) else 0.0
             filas_ac.append(f"""
             <tr>
-              <td><b>{_e(r['Cuenta'])}</b><div class="sub">{_e(r['Centro de costo'])}</div>
+              <td><b>{_e(r['Cuenta'])}</b>
+                  <div class="sub">{_e(r['Centro de costo'])} ·
+                    <span class="soc">{_e(r['Sociedad'])}</span></div>
                   {_strip_meses(r['_real_mes'], r['_ppto_mes'])}
                   <div class="sub">Desfavorable: {_e(r['Meses con desvío desfavorable'])}</div></td>
               <td class="num">{_m(r['Real YTD'])}</td>
@@ -1365,6 +1436,7 @@ def to_html(rep: dict) -> str:
   header .wrap {{ padding-bottom:0; }}
   h1 {{ margin:0 0 6px; font-size:25px; font-weight:800; letter-spacing:-0.3px; }}
   .hsub {{ opacity:.72; font-size:13.5px; }}
+  .hmix {{ opacity:.55; font-size:11.5px; margin-top:3px; }}
   h2 {{ font-size:17px; color:var(--morado); margin:34px 0 12px;
         border-bottom:2px solid var(--borde); padding-bottom:7px; }}
   .kpis {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px; }}
@@ -1387,6 +1459,8 @@ def to_html(rep: dict) -> str:
   .pos {{ color:var(--verde); font-weight:600; }}
   .neg {{ color:var(--rojo); font-weight:600; }}
   .sub {{ font-size:11px; color:var(--gris); font-weight:400; }}
+  .soc {{ font-size:10px; background:#F1EDF6; color:var(--morado2);
+          padding:1px 6px; border-radius:4px; font-weight:600; white-space:nowrap; }}
   ul.ins {{ margin:0; padding-left:20px; }}
   ul.ins li {{ margin-bottom:9px; line-height:1.6; }}
   .alerta {{ background:#FFF6F6; border:1px solid #F3D0D0; border-left:4px solid var(--rojo);
@@ -1426,6 +1500,7 @@ def to_html(rep: dict) -> str:
   <h1>Reporte de Gerencia — Real vs Presupuesto</h1>
   <div class="hsub">Kreems · {_e(meta['sociedad'])} · {_e(meta['periodo_lbl'])}
    · {meta['n_meses']} de 12 meses · generado {_e(meta['generado'])}</div>
+  <div class="hmix">Facturación del periodo: {_e(meta['mix_sociedad'])}</div>
 </div></header>
 <div class="wrap">
 
