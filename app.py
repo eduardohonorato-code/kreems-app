@@ -51,6 +51,9 @@ _cards_base = [
 
 # Páginas solo para usuarios sin restricción de CC (acceso total)
 _cards_full = [
+    ("🎯", "Reporte de Gerencia",
+     "Entregable único para comité: Real vs Presupuesto por CC, puente de EBIT y origen de cada brecha. Excel + HTML.",
+     "pages/16_reporte_gerencia.py"),
     ("📋", "EERR vs Presupuesto",
      "P&L completo Real vs Presupuesto: Ventas, Costo Variable, Costo Fijo, OPEX, EBIT y Utilidad Neta.",
      "pages/2_eerr.py"),
