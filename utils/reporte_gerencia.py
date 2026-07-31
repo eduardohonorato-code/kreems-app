@@ -222,14 +222,15 @@ def _clasificar_brecha(r_mes: list, p_mes: list, umbral: float) -> tuple:
     return "Mixto", mes_pico, meses_desv
 
 
-def _label_sociedad(ac: float, gn: float, umbral_dominio: float = 0.70) -> str:
+def _label_sociedad(ac: float, gn: float) -> str:
     """
-    Marca de qué sociedad viene el real: 'ACUÑA', 'Gran Natural' o 'Ambas'.
+    De qué sociedad viene el monto: 'ACUÑA 81%', 'Gran Natural 63%' o 'ACUÑA'.
 
-    Deliberadamente sin porcentajes: la mitad de las cuentas está repartida
-    entre las dos sociedades y una columna con cifras compitiendo contra los
-    montos vuelve ilegible la tabla. Se nombra la sociedad solo cuando concentra
-    al menos el 70%; si no, 'Ambas'.
+    Siempre lleva el porcentaje de la sociedad que predomina. Nombrarla sola
+    sería falso salvo cuando es exclusiva: Administración, por ejemplo, es 81%
+    ACUÑA pero tiene $16,5M de Gran Natural repartidos en 21 cuentas. El nombre
+    a secas queda reservado para el 100%, que es el único caso en que «solo esa
+    sociedad» es cierto.
 
     Se usa el valor absoluto para el reparto, porque hay cuentas con reversas
     (notas de crédito) que dejarían porcentajes sin sentido con el neto.
@@ -239,11 +240,11 @@ def _label_sociedad(ac: float, gn: float, umbral_dominio: float = 0.70) -> str:
     if total == 0:
         return "—"
     p_ac = ac / total
-    if p_ac >= umbral_dominio:
-        return ETIQUETA_SOCIEDAD[SOC_ACUNA]
-    if (1 - p_ac) >= umbral_dominio:
-        return ETIQUETA_SOCIEDAD[SOC_GRAN_NATURAL]
-    return "Ambas"
+    if p_ac >= 0.5:
+        dominante, p = ETIQUETA_SOCIEDAD[SOC_ACUNA], p_ac
+    else:
+        dominante, p = ETIQUETA_SOCIEDAD[SOC_GRAN_NATURAL], 1 - p_ac
+    return dominante if p >= 0.995 else f"{dominante} {p*100:.0f}%"
 
 
 def _texto_meses(pares: list) -> str:
@@ -295,16 +296,19 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
     # Reparto del real entre sociedades: el presupuesto es consolidado, pero el
     # real se factura en una u otra según la cuenta, y saber cuál importa
     # (ACUÑA está en quiebra y se está vaciando hacia Gran Natural).
-    def _mix(claves: list) -> pd.DataFrame:
-        piv = ytd.pivot_table(index=claves, columns="sociedad", values="real",
-                              aggfunc="sum", fill_value=0.0)
+    def _mix(claves: list, frame: pd.DataFrame) -> pd.DataFrame:
+        piv = frame.pivot_table(index=claves, columns="sociedad", values="real",
+                                aggfunc="sum", fill_value=0.0)
         for soc in (SOC_ACUNA, SOC_GRAN_NATURAL):
             if soc not in piv.columns:
                 piv[soc] = 0.0
         return piv
 
-    mix_cta = _mix(["codigo_cc", "codigo_cuenta"])
-    mix_cc = _mix(["codigo_cc"])
+    mix_cta = _mix(["codigo_cc", "codigo_cuenta"], ytd)
+    # El resumen por centro de costo muestra solo gasto, así que su reparto por
+    # sociedad tiene que calcularse sobre el mismo universo: incluir las ventas
+    # daría un porcentaje que no corresponde al monto de la fila.
+    mix_cc = _mix(["codigo_cc"], ytd[ytd["clasificacion"] != "INGRESO"])
     # Para la cabecera se usa la facturación, no el real total: mezclar ventas
     # y gastos en un mismo porcentaje no dice nada. La pregunta de gerencia es
     # cuánto del negocio sigue facturándose en ACUÑA.
@@ -1043,8 +1047,9 @@ def to_excel(rep: dict) -> bytes:
              f"Periodo acumulado: {meta['periodo_lbl']} ({meta['n_meses']} de 12 meses)",
              f"Facturación del periodo: {meta['mix_sociedad']}",
              "El presupuesto es uno solo para el negocio. La columna «Sociedad» de las hojas "
-             "3, 4 y 5 indica dónde se registra cada línea: se nombra la sociedad cuando "
-             "concentra al menos el 70% del monto, y «Ambas» cuando está repartido.",
+             "3, 4 y 5 indica dónde se registra cada línea: nombra la sociedad que concentra "
+             "el mayor monto y con qué porcentaje (ej. «ACUÑA 81%» = el 19% restante está en "
+             "Gran Natural). Sin porcentaje = el 100% está en esa sociedad.",
              f"Generado: {meta['generado']}"])
     if rep["alertas"]:
         h.seccion("Advertencias sobre la base de comparación")

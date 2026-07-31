@@ -160,9 +160,9 @@ st.markdown("<br>", unsafe_allow_html=True)
 # ── VISTA PREVIA ──────────────────────────────────────────────
 st.markdown(f"##### Resultado acumulado · {meta['periodo_lbl']} · {meta['sociedad']}")
 st.caption(
-    f"Facturación del periodo: {meta['mix_sociedad']}. La columna «Sociedad» de las "
-    f"tablas nombra la sociedad cuando concentra al menos el 70% del monto; si está "
-    f"repartido dice «Ambas»."
+    f"Facturación del periodo: {meta['mix_sociedad']}. La columna «Sociedad» nombra la "
+    f"sociedad que concentra el mayor monto y con qué porcentaje — «ACUÑA 81%» significa "
+    f"que el 19% restante está en Gran Natural. Sin porcentaje = 100% en esa sociedad."
 )
 
 cols_kpi = st.columns(4)
