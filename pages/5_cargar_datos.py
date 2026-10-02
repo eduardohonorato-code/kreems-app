@@ -54,6 +54,9 @@ def mostrar_resultado(resultado: dict):
         )
     else:
         st.error(f"✗ Error en la carga: {resultado['error']}")
+    avisos = [l.strip() for l in resultado["logs"] if "⚠" in l]
+    if resultado["ok"] and avisos:
+        st.warning("\n\n".join(avisos))
     with st.expander("Ver log de ejecución", expanded=not resultado["ok"]):
         st.code("\n".join(resultado["logs"]), language=None)
 
@@ -91,12 +94,15 @@ with tab_acuna:
         st.markdown("""
         <div class="info-box">
             <b style="color:#2d0050;">Formato esperado</b><br>
-            • Archivo Excel Obuma ACUÑA (.xlsx)<br>
-            • Fila 3: encabezado con rango de fechas<br>
-            • Fila 6: nombres de columnas CC<br>
-            • Columnas CC válidas: Ninguno, Administracion,
-              Costo Fabrica, Distribución, Ventas, Gerencia,
-              Maquina Comodato<br>
+            • Estado de Resultados por centro de costo de Obuma
+              ACUÑA (.xlsx), un mes completo<br>
+            • Columnas CC por nombre, con o sin código
+              (ej. "14885 Administracion"): Ninguno, Administracion,
+              Gerencia, Costo Fabrica, Distribucion,
+              Maquina Comodato, Ventas → se homologan a los
+              5 CC de Gran Natural (Costo Vendi y Otros Productos
+              se excluyen)<br>
+            • Se valida el cuadre contra las columnas y filas Total<br>
             • Las cuentas se mapean via <code>dim_homologacion</code>
         </div>
         """, unsafe_allow_html=True)
@@ -140,10 +146,12 @@ with tab_gn:
         st.markdown("""
         <div class="info-box">
             <b style="color:#2d0050;">Formato esperado</b><br>
-            • Archivo Excel Obuma GN (.xlsx)<br>
-            • Fila 3: encabezado con rango de fechas<br>
-            • 7 columnas: Cuenta, Ninguno, Administracion,
-              Comercial, Distribucion, Produccion, Total<br>
+            • Estado de Resultados por centro de costo de Obuma
+              GN (.xlsx), un mes completo<br>
+            • Columnas CC por nombre, con o sin código
+              (ej. "1 Administracion"): Ninguno, Administracion,
+              Comercial, Distribucion, Produccion<br>
+            • Se valida el cuadre contra las columnas y filas Total<br>
             • Las cuentas se cargan directamente
               (mismo plan de cuentas GN)
         </div>

@@ -10,25 +10,36 @@ import pandas as pd
 from datetime import date
 from sqlalchemy import text
 from .db import get_engine
+from .components import SOC_ACUNA, SOC_GRAN_NATURAL
 
 # ── Mapeos CC ─────────────────────────────────────────────────
+# Claves = nombre del CC normalizado (ver _norm_cc_obuma): sin código numérico
+# delante, sin tildes y en mayúsculas. Obuma exporta "14885 Administracion",
+# "001 Costo Fabrica", "Ninguno Ninguno"; formatos antiguos sin código también
+# calzan. Valor None = CC excluido por homologación (se avisa si trae montos).
+# Un CC que no esté aquí y traiga montos detiene la carga.
+# ACUÑA se homologa a los CC de GN: ambas sociedades quedan con CC-00..CC-04.
 MAPA_CC_ACUNA = {
     "NINGUNO":          "CC-00",
     "ADMINISTRACION":   "CC-01",
-    "COSTO FABRICA":    "CC-04",
+    "COSTO FABRICA":    "CC-04",   # → Produccion en GN
     "DISTRIBUCION":     "CC-03",
-    "VENTAS":           "CC-02",
-    "GERENCIA":         "CC-01",
-    "MAQUINA COMODATO": "CC-03",
+    "VENTAS":           "CC-02",   # → Comercial en GN
+    "GERENCIA":         "CC-01",   # → se consolida en Administracion
+    "MAQUINA COMODATO": "CC-03",   # → se consolida en Distribucion
+    "COSTO VENDI":      None,      # excluido (no aplica)
+    "OTROS PRODUCTOS":  None,      # excluido (sin definición)
 }
 
 MAPA_CC_GN = {
-    "Ninguno":        "CC-00",
-    "Administracion": "CC-01",
-    "Comercial":      "CC-02",
-    "Distribucion":   "CC-03",
-    "Produccion":     "CC-04",
+    "NINGUNO":        "CC-00",
+    "ADMINISTRACION": "CC-01",
+    "COMERCIAL":      "CC-02",
+    "DISTRIBUCION":   "CC-03",
+    "PRODUCCION":     "CC-04",
 }
+
+assert {cc for cc in MAPA_CC_ACUNA.values() if cc} <= set(MAPA_CC_GN.values()),     "ACUÑA debe homologarse a los mismos CC de Gran Natural"
 
 HOJAS_CC_PPTO = {
     "ADMINISTRACIÓN": "CC-01",
@@ -46,26 +57,16 @@ MESES_PPTO = {
     "Nov": "11", "Noviembre": "11", "Dic": "12", "Diciembre": "12",
 }
 
-FILAS_IGNORAR = {
-    "total ingresos", "total gastos", "gastos", "ingresos",
-    "cuenta", "resultado del ejercicio", "total"
-}
-
-
 def _log(lines: list, msg: str):
     lines.append(f"  {msg}")
 
 
-def _extraer_periodo_obuma(ws) -> str:
-    """Busca 'Desde el DD-MM-YYYY' en las primeras 5 filas del workbook."""
-    for row in ws.iter_rows(max_row=5, values_only=True):
-        for cell in row:
-            if cell and isinstance(cell, str):
-                match = re.search(r"Desde el[\s\xa0]+(\d{2})-(\d{2})-(\d{4})", cell)
-                if match:
-                    _, mes, anio = match.groups()
-                    return f"{anio}-{mes}"
-    raise ValueError("No se encontró el periodo en el encabezado. Revisa el formato del archivo.")
+def _norm_txt(s) -> str:
+    """Normaliza un encabezado: minúsculas, sin acentos, sin espacios extra."""
+    s = str(s).strip().lower()
+    s = "".join(c for c in unicodedata.normalize("NFD", s)
+                if unicodedata.category(c) != "Mn")
+    return s
 
 
 def _registrar_auditoria(engine, tabla, periodo, n, observaciones):
@@ -81,6 +82,292 @@ def _registrar_auditoria(engine, tabla, periodo, n, observaciones):
 
 
 # ═══════════════════════════════════════════════════════════════
+# LECTURA EERR OBUMA (común a ACUÑA y Gran Natural)
+# ═══════════════════════════════════════════════════════════════
+
+_RE_PERIODO_OBUMA = re.compile(
+    r"Desde el[\s\xa0]+(\d{2})-(\d{2})-(\d{4})[\s\xa0]+Hasta el[\s\xa0]+(\d{2})-(\d{2})-(\d{4})"
+)
+_RE_CUENTA_OBUMA = re.compile(r"^(\d+(?:\.\d+)+)\s*(.*)$")
+_TOLERANCIA_CUADRE = 1.0  # pesos
+
+
+def _extraer_periodo_obuma(ws) -> tuple[str, list]:
+    """
+    Busca 'Desde el DD-MM-YYYY Hasta el DD-MM-YYYY' en las primeras filas.
+    Exige que el rango sea un único mes (si no, cargaría varios meses como uno).
+    Retorna (periodo 'YYYY-MM', avisos).
+    """
+    for row in ws.iter_rows(max_row=8, values_only=True):
+        for cell in row:
+            if not isinstance(cell, str):
+                continue
+            m = _RE_PERIODO_OBUMA.search(cell)
+            if not m:
+                continue
+            d1, m1, a1, d2, m2, a2 = m.groups()
+            if (a1, m1) != (a2, m2):
+                raise ValueError(
+                    f"El archivo cubre más de un mes ({d1}-{m1}-{a1} a {d2}-{m2}-{a2}). "
+                    "Exporta desde Obuma un mes a la vez."
+                )
+            avisos = []
+            fin_mes = (pd.Timestamp(f"{a1}-{m1}-01") + pd.offsets.MonthEnd(0)).day
+            if d1 != "01" or int(d2) != fin_mes:
+                avisos.append(f"⚠ Rango parcial del mes: {d1}-{m1}-{a1} a {d2}-{m2}-{a2}")
+            return f"{a1}-{m1}", avisos
+    raise ValueError("No se encontró 'Desde el ... Hasta el ...' en el encabezado. "
+                     "Revisa que sea el Estado de Resultados por centro de costo de Obuma.")
+
+
+def _norm_cc_obuma(encabezado) -> str:
+    """
+    Nombre de CC comparable: '14885 Administracion' → 'ADMINISTRACION',
+    '001 Costo Fabrica' → 'COSTO FABRICA', 'Ninguno Ninguno' → 'NINGUNO'.
+    Obuma antepone el código del CC; el CC "Ninguno" tiene como código la misma palabra.
+    """
+    tokens = _norm_txt(encabezado).upper().split()
+    if len(tokens) > 1 and tokens[0].isdigit():
+        tokens = tokens[1:]
+    if len(tokens) == 2 and tokens[0] == tokens[1]:
+        tokens = tokens[:1]
+    return " ".join(tokens)
+
+
+def _monto_obuma(v) -> float:
+    """Celda numérica de Obuma → float. Acepta texto con formato chileno (1.234.567)."""
+    if v is None:
+        return 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = str(v).strip().replace("$", "").replace(" ", "").replace("\xa0", "")
+    if s in ("", "-"):
+        return 0.0
+    return float(s.replace(".", "").replace(",", "."))
+
+
+def parsear_eerr_obuma(file_bytes: bytes, mapa_cc: dict) -> dict:
+    """
+    Lee el Estado de Resultados por centro de costo exportado de Obuma.
+    No toca la BD.
+
+    Estructura esperada (ACUÑA y GN): título, 'Desde el ... Hasta el ...', y
+    secciones Ingresos / Gastos, cada una con su fila 'Cuenta' de encabezados
+    de CC, filas '<código> <nombre>' y una fila 'Total ...'. Las columnas se
+    ubican por el nombre del encabezado (no por posición).
+
+    Se valida contra el propio archivo para detectar cambios de formato:
+      - por cuenta: suma de columnas CC = columna Total
+      - por sección: suma de cuentas = fila 'Total Ingresos' / 'Total Gastos'
+    Un CC que no esté en mapa_cc y traiga montos detiene la carga; uno mapeado
+    a None (excluido por homologación) no se carga y se avisa si trae montos.
+
+    Retorna {"periodo", "df", "avisos"}; df = codigo_cuenta, nombre_cuenta,
+    codigo_cc, valor (agregado por cuenta + CC, sin ceros).
+    """
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+
+    # La hoja puede llamarse Hoja1 o Hoja2: usar la que trae el rango de fechas
+    ws, periodo, avisos = None, None, []
+    for hoja in [wb.active] + [h for h in wb.worksheets if h is not wb.active]:
+        try:
+            periodo, avisos = _extraer_periodo_obuma(hoja)
+            ws = hoja
+            break
+        except ValueError as e:
+            if "más de un mes" in str(e):
+                raise
+            ultimo_error = e
+    if ws is None:
+        raise ultimo_error
+
+    cols = None          # índice columna → (encabezado, codigo_cc | None, está en mapa_cc)
+    idx_total = None
+    suma_seccion = {}
+    secciones = []
+    registros = []
+    sin_mapa = {}        # encabezado → monto en CC desconocidos
+    excluido_monto = {}  # encabezado → monto en CC excluidos por homologación
+    desconocidos, excluidos = set(), set()
+
+    for n_fila, row in enumerate(ws.iter_rows(values_only=True), start=1):
+        primera = str(row[0]).strip() if row and row[0] is not None else ""
+        if not primera:
+            continue
+
+        # Encabezados de CC (uno por sección)
+        if primera.lower() == "cuenta":
+            cols, idx_total = {}, None
+            for i, h in enumerate(row[1:], start=1):
+                if h is None or not str(h).strip():
+                    continue
+                nombre = _norm_cc_obuma(h)
+                if nombre == "TOTAL":
+                    idx_total = i
+                else:
+                    cols[i] = (str(h).strip(), mapa_cc.get(nombre), nombre in mapa_cc)
+            if idx_total is None:
+                raise ValueError(f"Fila {n_fila}: el encabezado no trae columna 'Total'.")
+            if not any(cc for _, cc, _ in cols.values()):
+                raise ValueError(f"Fila {n_fila}: ninguna columna de CC reconocida. "
+                                 f"Encabezados: {[h for h, _, _ in cols.values()]}")
+            desconocidos.update(h for h, _, conocido in cols.values() if not conocido)
+            excluidos.update(h for h, cc, conocido in cols.values() if conocido and cc is None)
+            suma_seccion = {i: 0.0 for i in [*cols, idx_total]}
+            continue
+
+        m = _RE_CUENTA_OBUMA.match(primera)
+        if m:
+            if cols is None:
+                raise ValueError(f"Fila {n_fila}: aparece una cuenta antes de la fila 'Cuenta'.")
+            codigo, nombre_cta = m.group(1), m.group(2).strip()
+            montos = {i: _monto_obuma(row[i] if i < len(row) else None) for i in cols}
+            total = _monto_obuma(row[idx_total] if idx_total < len(row) else None)
+            if abs(sum(montos.values()) - total) > _TOLERANCIA_CUADRE:
+                raise ValueError(
+                    f"Fila {n_fila} ({codigo}): la suma de los CC (${sum(montos.values()):,.0f}) "
+                    f"no cuadra con la columna Total (${total:,.0f}). ¿Cambiaron las columnas?"
+                )
+            suma_seccion[idx_total] += total
+            for i, v in montos.items():
+                suma_seccion[i] += v
+                if v == 0:
+                    continue
+                encabezado, codigo_cc, conocido = cols[i]
+                if codigo_cc is None:
+                    destino = excluido_monto if conocido else sin_mapa
+                    destino[encabezado] = destino.get(encabezado, 0.0) + v
+                    continue
+                registros.append({"codigo_cuenta": codigo, "nombre_cuenta": nombre_cta,
+                                  "codigo_cc": codigo_cc, "valor": v})
+            continue
+
+        # Totales de sección: deben cuadrar con lo leído
+        if primera.lower().startswith("total") and cols is not None:
+            for i, suma in suma_seccion.items():
+                v = _monto_obuma(row[i] if i < len(row) else None)
+                if abs(v - suma) > _TOLERANCIA_CUADRE:
+                    col = "Total" if i == idx_total else cols[i][0]
+                    raise ValueError(
+                        f"'{primera}' no cuadra en la columna '{col}': archivo ${v:,.0f} vs "
+                        f"suma de cuentas leídas ${suma:,.0f}. Puede haber filas que no se reconocieron."
+                    )
+            secciones.append(f"{primera} ${suma_seccion[idx_total]:,.0f}")
+            cols = None
+            continue
+
+        # 'Resultado del ejercicio' es informativo (ingresos - gastos)
+        if primera.lower().startswith("resultado"):
+            continue
+        # Títulos ('ESTADO RESULTADOS', 'Ingresos', 'Gastos'...) no deben traer montos
+        if any(isinstance(c, (int, float)) and c != 0 for c in row[1:]):
+            raise ValueError(f"Fila {n_fila} con montos no reconocida: '{primera}'.")
+
+    if sin_mapa:
+        detalle = ", ".join(f"'{h}' ${v:,.0f}" for h, v in sin_mapa.items())
+        raise ValueError(f"Hay montos en centros de costo sin mapeo: {detalle}. "
+                         "Agrega el CC al mapa de utils/etl.py antes de cargar.")
+    if not secciones:
+        avisos.append("⚠ No se encontraron filas 'Total ...' para validar el cuadre por sección")
+    else:
+        avisos.append("Cuadre con totales del archivo OK: " + " · ".join(secciones))
+
+    if excluido_monto:
+        detalle = ", ".join(f"'{h}' ${v:,.0f}" for h, v in excluido_monto.items())
+        avisos.append(f"⚠ Montos en CC excluidos por homologación, no se cargan: {detalle}")
+    elif excluidos:
+        avisos.append(f"CC excluidos por homologación (sin montos): {sorted(excluidos)}")
+    if desconocidos:
+        avisos.append(f"CC sin mapeo ignorados (sin montos): {sorted(desconocidos)}")
+
+    df = pd.DataFrame(registros, columns=["codigo_cuenta", "nombre_cuenta", "codigo_cc", "valor"])
+    df = (df.groupby(["codigo_cuenta", "codigo_cc"], as_index=False)
+            .agg(nombre_cuenta=("nombre_cuenta", "first"), valor=("valor", "sum")))
+    df = df[df["valor"] != 0].reset_index(drop=True)
+    return {"periodo": periodo, "df": df, "avisos": avisos}
+
+
+def _cargar_fact_real(engine, df: pd.DataFrame, periodo: str, sociedad: str,
+                      logs: list) -> pd.DataFrame:
+    """
+    Reemplaza el mes de la sociedad en marts.fact_real con df (codigo_cuenta,
+    codigo_cc, valor). Excluye la cuenta CV y preserva fuente='CV_MANUAL'.
+    """
+    # Cuenta 3.1.01.001: se gestiona exclusivamente via staging.cv_real_manual
+    cv = df[df["codigo_cuenta"] == CODIGO_CUENTA_CV]
+    if not cv.empty:
+        _log(logs, f"Cuenta {CODIGO_CUENTA_CV} excluida del ETL (${cv['valor'].sum():,.0f}; "
+                   "se gestiona via CV staging)")
+    df = df[df["codigo_cuenta"] != CODIGO_CUENTA_CV]
+    if df.empty:
+        raise ValueError("No quedaron registros con monto para cargar.")
+
+    fecha = pd.to_datetime(f"{periodo}-01")
+    df_final = pd.DataFrame({
+        "fecha":          fecha,
+        "codigo_cuenta":  df["codigo_cuenta"].values,
+        "codigo_cc":      df["codigo_cc"].values,
+        "valor":          df["valor"].values,
+        "periodo":        periodo,
+        "fuente":         "OBUMA",
+        "archivo_origen": "webapp_upload",
+        "sociedad":       sociedad,
+        "fecha_id":       int(fecha.strftime("%Y%m%d")),
+    })
+
+    for cc, val in df_final.groupby("codigo_cc")["valor"].sum().items():
+        _log(logs, f"  {cc}: ${val:,.0f}")
+
+    with engine.begin() as conn:
+        # Excluir fuente='CV_MANUAL' para preservar el costo variable ingresado manualmente
+        r = conn.execute(text("""
+            DELETE FROM marts.fact_real
+            WHERE periodo = :p AND sociedad = :s AND fuente <> 'CV_MANUAL'
+        """), {"p": periodo, "s": sociedad})
+        _log(logs, f"Registros anteriores eliminados: {r.rowcount} (CV Manual preservado)")
+        df_final.to_sql("fact_real", con=conn, schema="marts", if_exists="append",
+                        index=False, method="multi")
+
+    _log(logs, f"✓ {len(df_final)} registros cargados en marts.fact_real "
+               f"(${df_final['valor'].sum():,.0f})")
+    return df_final
+
+
+def _cuentas_fuera_de_dim(engine, codigos) -> list:
+    """Códigos que no existen en master.dim_cuentas (quedarían sin categoría EERR)."""
+    with engine.connect() as conn:
+        existentes = {r[0] for r in conn.execute(
+            text("SELECT codigo_cuenta FROM master.dim_cuentas")).fetchall()}
+    return sorted(set(codigos) - existentes)
+
+
+def homologar_acuna(df: pd.DataFrame, homologacion: dict, inactivas: set) -> tuple:
+    """
+    Mapea cuentas ACUÑA → plan GN con dim_homologacion y reagrega por cuenta + CC.
+    Una cuenta con montos que no está en la homologación detiene la carga
+    (ACUÑA y GN reusan códigos para conceptos distintos: no se puede adivinar).
+    Retorna (df homologado, avisos).
+    """
+    avisos = []
+    con_monto = df.groupby(["codigo_cuenta", "nombre_cuenta"])["valor"].sum()
+    desconocidas = [(c, n, v) for (c, n), v in con_monto.items()
+                    if c not in homologacion and c not in inactivas]
+    if desconocidas:
+        detalle = "; ".join(f"{c} {n} ${v:,.0f}" for c, n, v in desconocidas)
+        raise ValueError(f"Cuentas ACUÑA con montos sin homologación: {detalle}. "
+                         "Agrégalas a master.dim_homologacion antes de cargar.")
+    for (c, n), v in con_monto.items():
+        if c in inactivas:
+            avisos.append(f"⚠ {c} {n} ${v:,.0f} omitida (homologación inactiva)")
+
+    df = df[df["codigo_cuenta"].isin(homologacion)].copy()
+    df["codigo_cuenta"] = df["codigo_cuenta"].map(homologacion)
+    df = df.groupby(["codigo_cuenta", "codigo_cc"], as_index=False)["valor"].sum()
+    return df[df["valor"] != 0].reset_index(drop=True), avisos
+
+
+# ═══════════════════════════════════════════════════════════════
 # ETL ACUÑA
 # ═══════════════════════════════════════════════════════════════
 
@@ -89,113 +376,40 @@ def run_etl_acuna(file_bytes: bytes) -> dict:
     Procesa Excel Obuma ACUÑA → marts.fact_real (sociedad = 'ACUÑA').
     Usa dim_homologacion para mapear cuentas ACUÑA → plan cuentas GN.
     """
-    import openpyxl
     logs = []
-    engine = get_engine()
-
     try:
         _log(logs, "Abriendo archivo Excel ACUÑA...")
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-
-        periodo = _extraer_periodo_obuma(ws)
+        leido = parsear_eerr_obuma(file_bytes, MAPA_CC_ACUNA)
+        periodo = leido["periodo"]
         _log(logs, f"Periodo detectado: {periodo}")
+        for a in leido["avisos"]:
+            _log(logs, a)
+        _log(logs, f"Cuenta × CC con monto en el archivo: {len(leido['df'])}")
+        if leido["df"].empty:
+            raise ValueError("El archivo no trae montos.")
 
-        # Cargar tabla de homologación
+        engine = get_engine()
         with engine.connect() as conn:
             rows = conn.execute(text("""
-                SELECT codigo_acuna, codigo_gn
+                SELECT codigo_acuna, codigo_gn, activo
                 FROM master.dim_homologacion
-                WHERE sociedad_origen = 'ACUÑA' AND activo = TRUE
+                WHERE sociedad_origen = 'ACUÑA'
             """)).fetchall()
-        homologacion = {r[0]: (r[1] if r[1] else r[0]) for r in rows}
+        homologacion = {r[0]: (r[1] if r[1] else r[0]) for r in rows if r[2]}
+        inactivas = {r[0] for r in rows if not r[2]}
         _log(logs, f"Homologación cargada: {len(homologacion)} cuentas mapeadas")
 
-        # Detectar columnas CC desde encabezado (fila 6, índice 5)
-        all_rows = list(ws.iter_rows(values_only=True))
-        if len(all_rows) < 7:
-            raise ValueError("El archivo no tiene suficientes filas. ¿Es el archivo correcto?")
+        df, avisos = homologar_acuna(leido["df"], homologacion, inactivas)
+        for a in avisos:
+            _log(logs, a)
+        fuera = _cuentas_fuera_de_dim(engine, df["codigo_cuenta"])
+        if fuera:
+            _log(logs, f"⚠ Cuentas sin registro en dim_cuentas (saldrán sin categoría): {fuera}")
 
-        headers = [str(h).strip().upper() if h else "" for h in all_rows[5]]
-        MAPA_UPPER = {k.upper(): v for k, v in MAPA_CC_ACUNA.items()}
-        cc_indices = {i: MAPA_UPPER[h] for i, h in enumerate(headers) if h in MAPA_UPPER}
+        df_final = _cargar_fact_real(engine, df, periodo, SOC_ACUNA, logs)
+        _registrar_auditoria(engine, "marts.fact_real", periodo, len(df_final), "ETL ACUÑA via webapp")
 
-        if not cc_indices:
-            raise ValueError(f"No se encontraron columnas CC válidas. Encabezados: {headers}")
-        _log(logs, f"Columnas CC detectadas: {list(set(cc_indices.values()))}")
-
-        # Transformar filas
-        registros = []
-        for row in all_rows[6:]:
-            celda = row[0]
-            if not celda:
-                continue
-            celda_str = str(celda).strip()
-            if celda_str.lower() in FILAS_IGNORAR or celda_str.startswith("Total"):
-                continue
-            codigo_raw = celda_str.split(" ", 1)[0].strip()
-            if "." not in codigo_raw:
-                continue
-            if codigo_raw not in homologacion:
-                continue
-            codigo_gn = homologacion[codigo_raw]
-
-            for idx, codigo_cc in cc_indices.items():
-                if idx >= len(row) or row[idx] is None:
-                    continue
-                try:
-                    monto = float(row[idx])
-                except (TypeError, ValueError):
-                    continue
-                if monto == 0:
-                    continue
-                registros.append({
-                    "fecha":          pd.to_datetime(f"{periodo}-01"),
-                    "codigo_cuenta":  codigo_gn,
-                    "codigo_cc":      codigo_cc,
-                    "valor":          monto,
-                    "periodo":        periodo,
-                    "fuente":         "OBUMA",
-                    "archivo_origen": "webapp_upload",
-                    "sociedad":       "ACUÑA",
-                })
-
-        df = pd.DataFrame(registros)
-        _log(logs, f"Registros procesados: {len(df)}")
-        if df.empty:
-            raise ValueError("No se encontraron registros válidos. Verifica que las cuentas estén en la tabla de homologación.")
-
-        # Excluir cuenta 3.1.01.001: se gestiona exclusivamente via staging.cv_real_manual
-        antes = len(df)
-        df = df[df["codigo_cuenta"] != CODIGO_CUENTA_CV].copy()
-        if len(df) < antes:
-            _log(logs, f"Cuenta {CODIGO_CUENTA_CV} excluida del ETL (se gestiona via CV staging)")
-
-        # Resumen por CC
-        for cc, val in df.groupby("codigo_cc")["valor"].sum().items():
-            _log(logs, f"  {cc}: ${val:,.0f}")
-
-        # Cargar a BD
-        with engine.begin() as conn:
-            # Excluir fuente='CV_MANUAL' para preservar el costo variable ingresado manualmente
-            r = conn.execute(text("""
-                DELETE FROM marts.fact_real
-                WHERE periodo = :p AND sociedad = 'ACUÑA' AND fuente <> 'CV_MANUAL'
-            """), {"p": periodo})
-            _log(logs, f"Registros anteriores eliminados: {r.rowcount} (CV Manual preservado)")
-
-            df.to_sql("fact_real", con=conn, schema="marts", if_exists="append", index=False)
-
-            conn.execute(text("""
-                UPDATE marts.fact_real
-                SET fecha_id = TO_CHAR(fecha, 'YYYYMMDD')::INT
-                WHERE fecha_id IS NULL AND periodo = :p AND sociedad = 'ACUÑA'
-            """), {"p": periodo})
-
-        _log(logs, f"✓ {len(df)} registros cargados en marts.fact_real")
-        _registrar_auditoria(engine, "marts.fact_real", periodo, len(df), "ETL ACUÑA via webapp")
-
-        return {"ok": True, "periodo": periodo, "n_registros": len(df), "logs": logs, "error": None}
+        return {"ok": True, "periodo": periodo, "n_registros": len(df_final), "logs": logs, "error": None}
 
     except Exception as e:
         _log(logs, f"✗ Error: {e}")
@@ -209,96 +423,27 @@ def run_etl_acuna(file_bytes: bytes) -> dict:
 def run_etl_gn(file_bytes: bytes) -> dict:
     """
     Procesa Excel Obuma Gran Natural → marts.fact_real (sociedad = 'GRAN_NATURAL').
+    Las cuentas se cargan directo (plan de cuentas GN).
     """
-    import openpyxl
     logs = []
-    engine = get_engine()
-
     try:
         _log(logs, "Abriendo archivo Excel Gran Natural...")
-        # Extraer periodo con openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-        ws = wb.active
-        periodo = _extraer_periodo_obuma(ws)
+        leido = parsear_eerr_obuma(file_bytes, MAPA_CC_GN)
+        periodo = leido["periodo"]
         _log(logs, f"Periodo detectado: {periodo}")
-
-        # Leer con pandas para el melt
-        df_raw = pd.read_excel(io.BytesIO(file_bytes), header=None)
-        _log(logs, f"Filas leídas: {len(df_raw)}")
-
-        # El archivo GN tiene 7 columnas (Cuenta + 5 CC + Total)
-        n_cols = len(df_raw.columns)
-        if n_cols < 6:
-            raise ValueError(f"El archivo tiene solo {n_cols} columnas. Se esperan al menos 6.")
-
-        # Asignar nombres de columna estándar
-        col_names = ["Cuenta", "Ninguno", "Administracion", "Comercial", "Distribucion", "Produccion"]
-        if n_cols >= 7:
-            col_names.append("Total")
-        df_raw.columns = col_names + list(range(n_cols - len(col_names)))
-
-        # Filtrar solo filas con código de cuenta (contienen ".")
-        df = df_raw[
-            df_raw["Cuenta"].notna() &
-            df_raw["Cuenta"].astype(str).str.contains(r"\.", regex=True) &
-            ~df_raw["Cuenta"].astype(str).str.startswith("Desde") &
-            ~df_raw["Cuenta"].astype(str).str.startswith("Centro")
-        ].copy()
-
+        for a in leido["avisos"]:
+            _log(logs, a)
+        df = leido["df"]
+        _log(logs, f"Cuenta × CC con monto en el archivo: {len(df)}")
         if df.empty:
-            raise ValueError("No se encontraron filas con código de cuenta. ¿Es el archivo GN correcto?")
+            raise ValueError("El archivo no trae montos.")
 
-        df["codigo_cuenta"] = df["Cuenta"].astype(str).str.split(" ", n=1).str[0].str.strip()
+        engine = get_engine()
+        fuera = _cuentas_fuera_de_dim(engine, df["codigo_cuenta"])
+        if fuera:
+            _log(logs, f"⚠ Cuentas sin registro en dim_cuentas (saldrán sin categoría): {fuera}")
 
-        cols_cc = ["Ninguno", "Administracion", "Comercial", "Distribucion", "Produccion"]
-        df_long = df.melt(
-            id_vars=["codigo_cuenta"],
-            value_vars=cols_cc,
-            var_name="nombre_cc_raw",
-            value_name="valor"
-        )
-        df_long["valor"] = pd.to_numeric(df_long["valor"], errors="coerce")
-        df_long = df_long[df_long["valor"].notna() & (df_long["valor"] != 0)].copy()
-        df_long["codigo_cc"]      = df_long["nombre_cc_raw"].map(MAPA_CC_GN)
-        df_long["periodo"]        = periodo
-        df_long["fecha"]          = pd.to_datetime(f"{periodo}-01")
-        df_long["fuente"]         = "OBUMA"
-        df_long["archivo_origen"] = "webapp_upload"
-        df_long["sociedad"]       = "GRAN_NATURAL"
-
-        df_final = df_long[["fecha", "codigo_cuenta", "codigo_cc",
-                             "valor", "periodo", "fuente", "archivo_origen", "sociedad"]]
-
-        _log(logs, f"Registros procesados: {len(df_final)}")
-        if df_final.empty:
-            raise ValueError("No se encontraron registros válidos después del filtrado.")
-
-        # Excluir cuenta 3.1.01.001: se gestiona exclusivamente via staging.cv_real_manual
-        antes_gn = len(df_final)
-        df_final = df_final[df_final["codigo_cuenta"] != CODIGO_CUENTA_CV].copy()
-        if len(df_final) < antes_gn:
-            _log(logs, f"Cuenta {CODIGO_CUENTA_CV} excluida del ETL (se gestiona via CV staging)")
-
-        for cc, val in df_final.groupby("codigo_cc")["valor"].sum().items():
-            _log(logs, f"  {cc}: ${val:,.0f}")
-
-        with engine.begin() as conn:
-            # Excluir fuente='CV_MANUAL' para preservar el costo variable ingresado manualmente
-            r = conn.execute(text("""
-                DELETE FROM marts.fact_real
-                WHERE periodo = :p AND sociedad = 'GRAN_NATURAL' AND fuente <> 'CV_MANUAL'
-            """), {"p": periodo})
-            _log(logs, f"Registros anteriores eliminados: {r.rowcount} (CV Manual preservado)")
-
-            df_final.to_sql("fact_real", con=conn, schema="marts", if_exists="append", index=False)
-
-            conn.execute(text("""
-                UPDATE marts.fact_real
-                SET fecha_id = TO_CHAR(fecha, 'YYYYMMDD')::INT
-                WHERE fecha_id IS NULL AND periodo = :p AND sociedad = 'GRAN_NATURAL'
-            """), {"p": periodo})
-
-        _log(logs, f"✓ {len(df_final)} registros cargados en marts.fact_real")
+        df_final = _cargar_fact_real(engine, df, periodo, SOC_GRAN_NATURAL, logs)
         _registrar_auditoria(engine, "marts.fact_real", periodo, len(df_final), "ETL GRAN NATURAL via webapp")
 
         return {"ok": True, "periodo": periodo, "n_registros": len(df_final), "logs": logs, "error": None}
@@ -599,14 +744,6 @@ def run_etl_cv_sync() -> dict:
 _MESES_DET = ["ene", "feb", "mar", "abr", "may", "jun",
               "jul", "ago", "sep", "oct", "nov", "dic"]
 FUENTE_PPTO_DET = "PPTO_DETALLE"
-
-
-def _norm_txt(s) -> str:
-    """Normaliza un encabezado: minúsculas, sin acentos, sin espacios extra."""
-    s = str(s).strip().lower()
-    s = "".join(c for c in unicodedata.normalize("NFD", s)
-                if unicodedata.category(c) != "Mn")
-    return s
 
 
 # Mapa de encabezado normalizado → campo interno
