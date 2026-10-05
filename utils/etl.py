@@ -603,30 +603,68 @@ PERIODOS_2026 = {
 }
 
 
-def guardar_cv_staging(periodo: str, sociedad: str, monto: float) -> dict:
+_FILTRO_CV_STAGING = "TO_CHAR(periodo, 'YYYY-MM') = :p AND sociedad = :s"
+
+
+def _escribir_cv_fact_real(conn, periodo: str, sociedad: str, monto: float) -> int:
     """
-    Inserta o actualiza un registro en staging.cv_real_manual.
-    Si ya existe el periodo+sociedad, lo reemplaza (DELETE + INSERT).
+    Reemplaza el CV del mes+sociedad en marts.fact_real (cuenta 3.1.01.001, CC-00).
+    Con monto 0 solo lo borra. Retorna filas anteriores eliminadas.
+    """
+    # Limpiar también 'ACUNA' (variante sin tilde de datos históricos)
+    sociedad_alt = "ACUNA" if sociedad == SOC_ACUNA else sociedad
+    r = conn.execute(text("""
+        DELETE FROM marts.fact_real
+        WHERE periodo = :p AND sociedad IN (:s, :s_alt) AND codigo_cuenta = :cc
+    """), {"p": periodo, "s": sociedad, "s_alt": sociedad_alt, "cc": CODIGO_CUENTA_CV})
+    if monto:
+        fecha = pd.Timestamp(f"{periodo}-01")
+        conn.execute(text("""
+            INSERT INTO marts.fact_real
+                (fecha, codigo_cuenta, codigo_cc, valor, periodo, fuente,
+                 archivo_origen, sociedad, fecha_id)
+            VALUES (:f, :cc, :cc_cv, :v, :p, 'CV_MANUAL', 'staging.cv_real_manual', :s, :fid)
+        """), {"f": fecha.date(), "cc": CODIGO_CUENTA_CV, "cc_cv": CODIGO_CC_CV,
+               "v": monto, "p": periodo, "s": sociedad, "fid": int(fecha.strftime("%Y%m%d"))})
+    return r.rowcount
+
+
+def guardar_cv_staging(periodo: str, sociedad: str, monto: float,
+                       ingresado_por: str | None = None) -> dict:
+    """
+    Guarda el CV real del mes+sociedad en staging.cv_real_manual y lo escribe
+    en marts.fact_real en la misma transacción (queda visible en el EERR).
+    Actualiza la fila existente para no perder cv_ppto (lo usa staging.vw_cv_real).
     """
     logs = []
     engine = get_engine()
     # Normalizar nombre de sociedad para consistencia con fact_real
-    sociedad = sociedad.replace("ACUNA", "ACUÑA") if sociedad == "ACUNA" else sociedad
+    sociedad = SOC_ACUNA if sociedad == "ACUNA" else sociedad
+    prm = {"p": periodo, "s": sociedad}
     try:
-        fecha = pd.to_datetime(f"{periodo}-01")
         with engine.begin() as conn:
-            r = conn.execute(text("""
+            # Si quedaron duplicados del mes+sociedad, conservar solo el primero
+            conn.execute(text(f"""
                 DELETE FROM staging.cv_real_manual
-                WHERE TO_CHAR(periodo, 'YYYY-MM') = :p AND sociedad = :s
-            """), {"p": periodo, "s": sociedad})
-            _log(logs, f"Registros anteriores eliminados: {r.rowcount}")
-
-            conn.execute(text("""
-                INSERT INTO staging.cv_real_manual (periodo, sociedad, monto)
-                VALUES (:fecha, :s, :m)
-            """), {"fecha": fecha, "s": sociedad, "m": monto})
-            _log(logs, f"✓ Guardado: {sociedad} {periodo} → ${monto:,.0f}")
-
+                WHERE {_FILTRO_CV_STAGING}
+                  AND id <> (SELECT MIN(id) FROM staging.cv_real_manual WHERE {_FILTRO_CV_STAGING})
+            """), prm)
+            r = conn.execute(text(f"""
+                UPDATE staging.cv_real_manual
+                SET monto = :m, fecha_ingreso = now(), ingresado_por = :u
+                WHERE {_FILTRO_CV_STAGING}
+            """), {**prm, "m": monto, "u": ingresado_por})
+            if r.rowcount == 0:
+                conn.execute(text("""
+                    INSERT INTO staging.cv_real_manual (periodo, sociedad, monto, ingresado_por)
+                    VALUES (:f, :s, :m, :u)
+                """), {"f": pd.Timestamp(f"{periodo}-01").date(), "s": sociedad,
+                       "m": monto, "u": ingresado_por})
+            n_prev = _escribir_cv_fact_real(conn, periodo, sociedad, monto)
+        _log(logs, f"✓ {sociedad} {periodo} → ${monto:,.0f} (staging + EERR; "
+                   f"{n_prev} registro anterior reemplazado)")
+        _registrar_auditoria(engine, "marts.fact_real", periodo, 1,
+                             f"CV manual {sociedad} via webapp")
         return {"ok": True, "logs": logs, "error": None}
     except Exception as e:
         _log(logs, f"✗ Error: {e}")
@@ -634,17 +672,27 @@ def guardar_cv_staging(periodo: str, sociedad: str, monto: float) -> dict:
 
 
 def eliminar_cv_staging(periodo: str, sociedad: str) -> dict:
-    """Elimina un registro de staging.cv_real_manual."""
+    """
+    Quita el CV real del mes+sociedad de staging.cv_real_manual y de marts.fact_real.
+    Si la fila tiene cv_ppto, se conserva con monto 0.
+    """
     logs = []
     engine = get_engine()
-    sociedad = sociedad.replace("ACUNA", "ACUÑA") if sociedad == "ACUNA" else sociedad
+    sociedad = SOC_ACUNA if sociedad == "ACUNA" else sociedad
+    prm = {"p": periodo, "s": sociedad}
     try:
         with engine.begin() as conn:
-            r = conn.execute(text("""
+            r = conn.execute(text(f"""
                 DELETE FROM staging.cv_real_manual
-                WHERE TO_CHAR(periodo, 'YYYY-MM') = :p AND sociedad = :s
-            """), {"p": periodo, "s": sociedad})
-        _log(logs, f"Eliminado: {sociedad} {periodo} ({r.rowcount} fila)")
+                WHERE {_FILTRO_CV_STAGING} AND COALESCE(cv_ppto, 0) = 0
+            """), prm)
+            conn.execute(text(f"""
+                UPDATE staging.cv_real_manual SET monto = 0, fecha_ingreso = now()
+                WHERE {_FILTRO_CV_STAGING}
+            """), prm)
+            n_fact = _escribir_cv_fact_real(conn, periodo, sociedad, 0)
+        _log(logs, f"Eliminado: {sociedad} {periodo} ({r.rowcount} fila staging, "
+                   f"{n_fact} fila EERR)")
         return {"ok": True, "logs": logs, "error": None}
     except Exception as e:
         _log(logs, f"✗ Error: {e}")

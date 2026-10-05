@@ -8,7 +8,7 @@ import pandas as pd
 from datetime import date
 from utils.auth import login, requiere_admin
 from utils.components import header, sidebar_kreems
-from utils.db import query
+from utils.db import query, query_live
 from utils.etl import run_etl_acuna, run_etl_gn, run_etl_cv_sync, guardar_cv_staging, eliminar_cv_staging
 
 _ANO = date.today().year
@@ -178,43 +178,77 @@ with tab_gn:
 with tab_cv:
     st.markdown("#### Costo Variable Real — Ingreso Manual")
     st.caption(
-        "Ingresa el costo variable real por sociedad y periodo. "
-        "Los datos se guardan en staging y luego se sincronizan a fact_real."
+        "Ingresa el costo variable real por sociedad y periodo. Al guardar queda "
+        "en staging y en el EERR al mismo tiempo (cuenta 3.1.01.001, CC-00)."
     )
     st.markdown("")
+
+    # Sin caché: la tabla debe reflejar lo recién guardado
+    try:
+        df_cv = query_live("""
+            WITH stg AS (
+                SELECT TO_CHAR(periodo, 'YYYY-MM') AS periodo, sociedad, SUM(monto) AS monto
+                FROM staging.cv_real_manual
+                GROUP BY 1, 2
+            ), fr AS (
+                SELECT periodo, sociedad,
+                       SUM(valor) FILTER (WHERE codigo_cuenta = '3.1.01.001') AS en_eerr,
+                       COUNT(*) FILTER (WHERE fuente = 'OBUMA') > 0 AS hay_obuma,
+                       COALESCE(SUM(valor) FILTER (WHERE codigo_cuenta LIKE '4.1.%'), 0) > 0
+                           AS hay_ventas
+                FROM marts.fact_real
+                WHERE periodo LIKE :anio
+                GROUP BY 1, 2
+            )
+            SELECT COALESCE(stg.periodo, fr.periodo)   AS periodo,
+                   COALESCE(stg.sociedad, fr.sociedad) AS sociedad,
+                   COALESCE(stg.monto, 0)              AS monto,
+                   COALESCE(fr.en_eerr, 0)             AS en_eerr,
+                   COALESCE(fr.hay_obuma, FALSE)       AS hay_obuma,
+                   COALESCE(fr.hay_ventas, FALSE)      AS hay_ventas
+            FROM stg FULL JOIN fr ON fr.periodo = stg.periodo AND fr.sociedad = stg.sociedad
+            WHERE COALESCE(stg.periodo, fr.periodo) LIKE :anio
+            ORDER BY 1, 2
+        """, {"anio": f"{_ANO}-%"})
+        df_cv["monto"] = df_cv["monto"].astype(float)
+        df_cv["en_eerr"] = df_cv["en_eerr"].astype(float)
+    except Exception as e:
+        st.warning(f"No se pudo leer el costo variable: {e}")
+        df_cv = pd.DataFrame(columns=["periodo", "sociedad", "monto", "en_eerr", "hay_obuma", "hay_ventas"])
+
+    # Meses con ventas cargadas desde Obuma y sin costo variable
+    pendientes = df_cv[df_cv["hay_ventas"].astype(bool) & (df_cv["monto"] <= 0)]
 
     col_tabla, col_form = st.columns([1.4, 1])
 
     with col_tabla:
-        st.markdown("##### Datos actuales en staging")
-        try:
-            df_cv = query("""
-                SELECT
-                    TO_CHAR(periodo, 'YYYY-MM') AS periodo,
-                    sociedad,
-                    monto
-                FROM staging.cv_real_manual
-                ORDER BY periodo, sociedad
-            """, {})
-
-            if not df_cv.empty:
-                df_cv_show = df_cv.rename(columns={
-                    "periodo": "Periodo", "sociedad": "Sociedad", "monto": "Monto CV Real"
-                })
-                st.dataframe(
-                    df_cv_show.style.format({"Monto CV Real": lambda v: f"${v:,.0f}"}),
-                    use_container_width=True,
-                    hide_index=True,
-                    height=320,
-                )
-                st.caption(f"{len(df_cv)} registros en staging.cv_real_manual")
-            else:
-                st.info("No hay datos ingresados aún.")
-
-        except Exception as e:
-            st.warning(f"No se pudo cargar staging: {e}")
+        st.markdown("##### Costo variable ingresado")
+        if not pendientes.empty:
+            st.warning("Meses con ventas y **sin costo variable**: " + ", ".join(
+                f"{r.sociedad} {r.periodo}" for r in pendientes.itertuples()))
+        df_show = df_cv[(df_cv["monto"] > 0) | (df_cv["en_eerr"] != 0)].copy()
+        if not df_show.empty:
+            df_show["estado"] = ((df_show["monto"] - df_show["en_eerr"]).abs() < 1).map(
+                {True: "✓ en EERR", False: "⚠ distinto al EERR"})
+            df_show = df_show[["periodo", "sociedad", "monto", "en_eerr", "estado"]].rename(columns={
+                "periodo": "Periodo", "sociedad": "Sociedad", "monto": "Monto CV Real",
+                "en_eerr": "En EERR", "estado": "Estado",
+            })
+            st.dataframe(
+                df_show.style.format({"Monto CV Real": "${:,.0f}", "En EERR": "${:,.0f}"}),
+                use_container_width=True,
+                hide_index=True,
+                height=320,
+            )
+        else:
+            st.info("No hay datos ingresados aún.")
 
     with col_form:
+        # Mensaje del último guardado (sobrevive al st.rerun)
+        msg = st.session_state.pop("cv_msg", None)
+        if msg:
+            st.success(msg)
+
         st.markdown("##### Agregar / actualizar registro")
 
         MESES_OPTS = {
@@ -226,13 +260,25 @@ with tab_cv:
             f"Noviembre ({_ANO}-11)":   f"{_ANO}-11", f"Diciembre ({_ANO}-12)":   f"{_ANO}-12",
         }
 
+        # Por defecto, el primer mes pendiente; si no hay, el último con EERR cargado
+        _periodos = list(MESES_OPTS.values())
+        _con_obuma = df_cv[df_cv["hay_obuma"].astype(bool)]
+        if not pendientes.empty:
+            _fila = pendientes.iloc[0]
+        elif not _con_obuma.empty:
+            _fila = _con_obuma.iloc[-1]
+        else:
+            _fila = None
+        _idx_mes = _periodos.index(_fila["periodo"]) if _fila is not None else date.today().month - 1
+        _idx_soc = 0 if _fila is not None and _fila["sociedad"] == "ACUÑA" else 1
+
         with st.form("form_cv", clear_on_submit=True):
-            mes_lbl   = st.selectbox("Periodo", list(MESES_OPTS.keys()), key="cv_mes")
-            sociedad  = st.radio("Sociedad", ["ACUÑA", "GRAN_NATURAL"],
-                                 horizontal=True, key="cv_soc")
+            mes_lbl   = st.selectbox("Periodo", list(MESES_OPTS.keys()), index=_idx_mes)
+            sociedad  = st.radio("Sociedad", ["ACUÑA", "GRAN_NATURAL"], index=_idx_soc,
+                                 horizontal=True)
             monto     = st.number_input("Monto CV Real ($)", min_value=0.0,
-                                        step=100_000.0, format="%.0f", key="cv_monto")
-            submitted = st.form_submit_button("Guardar en staging", type="primary",
+                                        step=100_000.0, format="%.0f")
+            submitted = st.form_submit_button("Guardar y actualizar EERR", type="primary",
                                               use_container_width=True)
 
         if submitted:
@@ -240,9 +286,13 @@ with tab_cv:
             if monto <= 0:
                 st.error("El monto debe ser mayor a 0.")
             else:
-                res = guardar_cv_staging(periodo_sel, sociedad, monto)
+                with st.spinner("Guardando..."):
+                    res = guardar_cv_staging(periodo_sel, sociedad, monto,
+                                             st.session_state.get("usuario"))
                 if res["ok"]:
-                    st.success(f"Guardado: {sociedad} {periodo_sel} -> ${monto:,.0f}")
+                    st.session_state["cv_msg"] = (
+                        f"✓ Guardado: {sociedad} {periodo_sel} → ${monto:,.0f} (ya está en el EERR)")
+                    st.cache_data.clear()
                     st.rerun()
                 else:
                     st.error(f"Error: {res['error']}")
@@ -253,26 +303,26 @@ with tab_cv:
             mes_del = st.selectbox("Periodo a eliminar", list(MESES_OPTS.keys()), key="cv_del_mes")
             soc_del = st.radio("Sociedad", ["ACUÑA", "GRAN_NATURAL"],
                                horizontal=True, key="cv_del_soc")
-            del_btn = st.form_submit_button("Eliminar de staging", type="secondary",
+            del_btn = st.form_submit_button("Eliminar", type="secondary",
                                             use_container_width=True)
         if del_btn:
-            res_del = eliminar_cv_staging(MESES_OPTS[mes_del], soc_del)
+            with st.spinner("Eliminando..."):
+                res_del = eliminar_cv_staging(MESES_OPTS[mes_del], soc_del)
             if res_del["ok"]:
-                st.success(f"Eliminado: {soc_del} {MESES_OPTS[mes_del]}")
+                st.session_state["cv_msg"] = (
+                    f"Eliminado: {soc_del} {MESES_OPTS[mes_del]} (staging y EERR)")
+                st.cache_data.clear()
                 st.rerun()
             else:
                 st.error(f"Error: {res_del['error']}")
 
     st.markdown("---")
-    st.markdown("##### Sincronizar staging a fact_real")
-    st.caption(
-        "Toma todos los registros de staging.cv_real_manual y los escribe "
-        "en marts.fact_real como COSTO_VAR (cuenta 3.1.01.001, CC-00)."
-    )
-    col_sync, _ = st.columns([1, 2])
-    with col_sync:
-        if st.button("Sincronizar CV Real", type="primary", key="btn_cv_sync",
-                     use_container_width=True):
+    with st.expander("Resincronizar todo el staging (mantención)"):
+        st.caption(
+            "Normalmente no hace falta: guardar y eliminar ya actualizan el EERR. "
+            "Úsalo solo si se editó staging.cv_real_manual directamente en la BD."
+        )
+        if st.button("Sincronizar CV Real", key="btn_cv_sync"):
             with st.spinner("Sincronizando..."):
                 res_sync = run_etl_cv_sync()
             mostrar_resultado({**res_sync, "periodo": "staging completo"})
