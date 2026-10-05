@@ -9,7 +9,8 @@ from datetime import date
 from utils.auth import login, requiere_admin
 from utils.components import header, sidebar_kreems
 from utils.db import query, query_live
-from utils.etl import run_etl_acuna, run_etl_gn, run_etl_cv_sync, guardar_cv_staging, eliminar_cv_staging
+from utils.etl import (run_etl_acuna, run_etl_gn, run_etl_cv_sync, guardar_cv_staging,
+                       eliminar_cv_staging, guardar_eliminacion_ic, eliminar_eliminacion_ic)
 
 _ANO = date.today().year
 
@@ -62,10 +63,11 @@ def mostrar_resultado(resultado: dict):
 
 
 # ── TABS ──────────────────────────────────────────────────────
-tab_acuna, tab_gn, tab_cv, tab_log = st.tabs([
+tab_acuna, tab_gn, tab_cv, tab_ic, tab_log = st.tabs([
     "🏭  ACUÑA",
     "🌿  Gran Natural",
     "💰  Costo Variable Real",
+    "🔁  Intercompany",
     "📜  Historial de Cargas",
 ])
 
@@ -328,6 +330,143 @@ with tab_cv:
             mostrar_resultado({**res_sync, "periodo": "staging completo"})
             if res_sync["ok"]:
                 st.cache_data.clear()
+
+
+# ────────────────────────────────────────────────────────────────
+# TAB: INTERCOMPANY
+# ────────────────────────────────────────────────────────────────
+with tab_ic:
+    st.markdown("#### Eliminaciones Intercompany — Servicios de Personal")
+    st.caption(
+        "ACUÑA factura a Gran Natural los servicios de personal: en ACUÑA queda como "
+        "venta (4.1.01.001) y en GN como gasto (3.1.01.018 Servicios de Personal, "
+        "Producción). No son ventas: la eliminación resta el monto de ambos lados. "
+        "Se mantiene aunque se recargue el mes desde Obuma."
+    )
+    st.markdown("")
+
+    try:
+        df_ic = query_live("""
+            WITH fr AS (
+                SELECT periodo,
+                       SUM(valor) FILTER (WHERE fuente = 'OBUMA' AND sociedad = 'ACUÑA'
+                                          AND codigo_cuenta = '4.1.01.001'
+                                          AND codigo_cc = 'CC-00')        AS venta_acuna,
+                       SUM(valor) FILTER (WHERE fuente = 'OBUMA' AND sociedad = 'GRAN_NATURAL'
+                                          AND codigo_cuenta = '3.1.01.018') AS serv_personal_gn,
+                       SUM(valor) FILTER (WHERE fuente = 'ELIM_IC')       AS en_eerr
+                FROM marts.fact_real
+                WHERE periodo LIKE :anio
+                GROUP BY 1
+            )
+            SELECT COALESCE(e.periodo, fr.periodo) AS periodo,
+                   COALESCE(e.monto, 0)            AS monto,
+                   COALESCE(e.glosa, '')           AS glosa,
+                   COALESCE(fr.venta_acuna, 0)     AS venta_acuna,
+                   COALESCE(fr.serv_personal_gn, 0) AS serv_personal_gn,
+                   COALESCE(fr.en_eerr, 0)         AS en_eerr
+            FROM staging.eliminaciones_ic e
+            FULL JOIN fr ON fr.periodo = e.periodo
+            WHERE COALESCE(e.periodo, fr.periodo) LIKE :anio
+              AND (e.monto IS NOT NULL OR COALESCE(fr.serv_personal_gn, 0) <> 0)
+            ORDER BY 1
+        """, {"anio": f"{_ANO}-%"})
+        for c in ["monto", "venta_acuna", "serv_personal_gn", "en_eerr"]:
+            df_ic[c] = df_ic[c].astype(float)
+    except Exception as e:
+        st.warning(f"No se pudieron leer las eliminaciones: {e}")
+        df_ic = pd.DataFrame(columns=["periodo", "monto", "glosa", "venta_acuna",
+                                      "serv_personal_gn", "en_eerr"])
+
+    pend_ic = df_ic[(df_ic["serv_personal_gn"] > 0) & (df_ic["monto"] <= 0)]
+
+    col_t_ic, col_f_ic = st.columns([1.5, 1])
+
+    with col_t_ic:
+        st.markdown("##### Eliminaciones registradas")
+        if not pend_ic.empty:
+            st.warning("Meses con Servicios de Personal en GN **sin eliminación**: "
+                       + ", ".join(pend_ic["periodo"]))
+        if not df_ic.empty:
+            def _estado_ic(r):
+                if r["monto"] <= 0:
+                    return "⚠ sin eliminar"
+                if abs(r["en_eerr"] + 2 * r["monto"]) > 1:
+                    return "⚠ no aplicada"
+                if abs(r["serv_personal_gn"] - r["monto"]) > 1:
+                    return "⚠ distinta a GN"
+                return "✓ aplicada"
+            df_ic_show = df_ic.assign(estado=df_ic.apply(_estado_ic, axis=1))[
+                ["periodo", "monto", "venta_acuna", "serv_personal_gn", "estado", "glosa"]
+            ].rename(columns={
+                "periodo": "Periodo", "monto": "Eliminado",
+                "venta_acuna": "Venta ACUÑA (Obuma)",
+                "serv_personal_gn": "Serv. Personal GN (Obuma)",
+                "estado": "Estado", "glosa": "Glosa",
+            })
+            st.dataframe(
+                df_ic_show.style.format({c: "${:,.0f}" for c in
+                                         ["Eliminado", "Venta ACUÑA (Obuma)",
+                                          "Serv. Personal GN (Obuma)"]}),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.info("No hay eliminaciones ni servicios de personal en el año.")
+
+    with col_f_ic:
+        msg_ic = st.session_state.pop("ic_msg", None)
+        if msg_ic:
+            st.success(msg_ic[0])
+            for a in msg_ic[1]:
+                st.warning(a)
+
+        st.markdown("##### Agregar / actualizar eliminación")
+        _per_ic = [f"{_ANO}-{m:02d}" for m in range(1, 13)]
+        # Por defecto el primer mes pendiente, con el monto de GN sugerido
+        _sug = pend_ic.iloc[0] if not pend_ic.empty else None
+        with st.form("form_ic", clear_on_submit=True):
+            per_ic = st.selectbox("Periodo", _per_ic,
+                                  index=_per_ic.index(_sug["periodo"]) if _sug is not None
+                                  else date.today().month - 1)
+            monto_ic = st.number_input("Monto a eliminar ($)", min_value=0.0, step=100_000.0,
+                                       format="%.0f",
+                                       value=float(_sug["serv_personal_gn"]) if _sug is not None
+                                       else 0.0)
+            glosa_ic = st.text_input("Glosa",
+                                     value="Factura ACUÑA → GN servicios de personal")
+            ok_ic = st.form_submit_button("Guardar y aplicar", type="primary",
+                                          use_container_width=True)
+        if ok_ic:
+            if monto_ic <= 0:
+                st.error("El monto debe ser mayor a 0.")
+            else:
+                with st.spinner("Aplicando..."):
+                    res_ic = guardar_eliminacion_ic(per_ic, monto_ic, glosa_ic.strip(),
+                                                    st.session_state.get("usuario"))
+                if res_ic["ok"]:
+                    st.session_state["ic_msg"] = (
+                        f"✓ Eliminación {per_ic}: −${monto_ic:,.0f} aplicada en el EERR",
+                        [l.strip() for l in res_ic["logs"] if "⚠" in l])
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(f"Error: {res_ic['error']}")
+
+        st.markdown("---")
+        st.markdown("##### Quitar eliminación")
+        with st.form("form_ic_del", clear_on_submit=True):
+            per_del_ic = st.selectbox("Periodo", _per_ic, key="ic_del_mes")
+            del_ic = st.form_submit_button("Quitar", type="secondary",
+                                           use_container_width=True)
+        if del_ic:
+            with st.spinner("Quitando..."):
+                res_del_ic = eliminar_eliminacion_ic(per_del_ic)
+            if res_del_ic["ok"]:
+                st.session_state["ic_msg"] = (f"Eliminación {per_del_ic} quitada", [])
+                st.cache_data.clear()
+                st.rerun()
+            else:
+                st.error(f"Error: {res_del_ic['error']}")
 
 
 # ────────────────────────────────────────────────────────────────

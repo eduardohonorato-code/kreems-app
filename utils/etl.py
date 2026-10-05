@@ -320,12 +320,13 @@ def _cargar_fact_real(engine, df: pd.DataFrame, periodo: str, sociedad: str,
         _log(logs, f"  {cc}: ${val:,.0f}")
 
     with engine.begin() as conn:
-        # Excluir fuente='CV_MANUAL' para preservar el costo variable ingresado manualmente
+        # Preservar el costo variable manual y las eliminaciones intercompany
         r = conn.execute(text("""
             DELETE FROM marts.fact_real
-            WHERE periodo = :p AND sociedad = :s AND fuente <> 'CV_MANUAL'
-        """), {"p": periodo, "s": sociedad})
-        _log(logs, f"Registros anteriores eliminados: {r.rowcount} (CV Manual preservado)")
+            WHERE periodo = :p AND sociedad = :s AND fuente NOT IN ('CV_MANUAL', :elim)
+        """), {"p": periodo, "s": sociedad, "elim": FUENTE_ELIM_IC})
+        _log(logs, f"Registros anteriores eliminados: {r.rowcount} "
+                   "(CV Manual y eliminaciones intercompany preservados)")
         df_final.to_sql("fact_real", con=conn, schema="marts", if_exists="append",
                         index=False, method="multi")
 
@@ -408,6 +409,7 @@ def run_etl_acuna(file_bytes: bytes) -> dict:
 
         df_final = _cargar_fact_real(engine, df, periodo, SOC_ACUNA, logs)
         _registrar_auditoria(engine, "marts.fact_real", periodo, len(df_final), "ETL ACUÑA via webapp")
+        _aviso_intercompany(engine, periodo, logs)
 
         return {"ok": True, "periodo": periodo, "n_registros": len(df_final), "logs": logs, "error": None}
 
@@ -445,6 +447,7 @@ def run_etl_gn(file_bytes: bytes) -> dict:
 
         df_final = _cargar_fact_real(engine, df, periodo, SOC_GRAN_NATURAL, logs)
         _registrar_auditoria(engine, "marts.fact_real", periodo, len(df_final), "ETL GRAN NATURAL via webapp")
+        _aviso_intercompany(engine, periodo, logs)
 
         return {"ok": True, "periodo": periodo, "n_registros": len(df_final), "logs": logs, "error": None}
 
@@ -782,6 +785,125 @@ def run_etl_cv_sync() -> dict:
     except Exception as e:
         _log(logs, f"✗ Error: {e}")
         return {"ok": False, "n_registros": 0, "logs": logs, "error": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════
+# ELIMINACIONES INTERCOMPANY
+# staging.eliminaciones_ic  →  marts.fact_real (fuente = 'ELIM_IC')
+# ═══════════════════════════════════════════════════════════════
+
+FUENTE_ELIM_IC = "ELIM_IC"
+
+# ACUÑA (que paga los sueldos) factura servicios de personal a GN: queda como
+# venta en ACUÑA y como gasto en GN. No son ventas: se eliminan ambos lados.
+ELIM_IC_LADOS = [
+    (SOC_ACUNA,        "4.1.01.001", "CC-00"),   # venta ACUÑA
+    (SOC_GRAN_NATURAL, "3.1.01.018", "CC-04"),   # servicios de personal GN
+]
+
+
+def _montos_obuma_ic(conn, periodo: str) -> list:
+    """[(sociedad, cuenta, cc, monto Obuma)] de cada lado de la eliminación en el mes."""
+    out = []
+    for soc, cta, cc in ELIM_IC_LADOS:
+        v = conn.execute(text("""
+            SELECT COALESCE(SUM(valor), 0) FROM marts.fact_real
+            WHERE periodo = :p AND sociedad = :s AND codigo_cuenta = :c
+              AND codigo_cc = :cc AND fuente = 'OBUMA'
+        """), {"p": periodo, "s": soc, "c": cta, "cc": cc}).scalar()
+        out.append((soc, cta, cc, float(v)))
+    return out
+
+
+def _escribir_elim_fact_real(conn, periodo: str, monto: float) -> None:
+    """Reemplaza las filas de eliminación del mes en marts.fact_real (monto 0 = solo borrar)."""
+    conn.execute(text("DELETE FROM marts.fact_real WHERE periodo = :p AND fuente = :f"),
+                 {"p": periodo, "f": FUENTE_ELIM_IC})
+    if not monto:
+        return
+    fecha = pd.Timestamp(f"{periodo}-01")
+    for soc, cta, cc in ELIM_IC_LADOS:
+        conn.execute(text("""
+            INSERT INTO marts.fact_real
+                (fecha, codigo_cuenta, codigo_cc, valor, periodo, fuente,
+                 archivo_origen, sociedad, fecha_id)
+            VALUES (:f, :c, :cc, :v, :p, :fu, 'staging.eliminaciones_ic', :s, :fid)
+        """), {"f": fecha.date(), "c": cta, "cc": cc, "v": -monto, "p": periodo,
+               "fu": FUENTE_ELIM_IC, "s": soc, "fid": int(fecha.strftime("%Y%m%d"))})
+
+
+def guardar_eliminacion_ic(periodo: str, monto: float, glosa: str = "",
+                           ingresado_por: str | None = None) -> dict:
+    """
+    Registra (o reemplaza) la eliminación intercompany del mes y la aplica en
+    marts.fact_real: resta el monto de la venta ACUÑA y de servicios de personal GN.
+    Avisa si Obuma trae menos que el monto en algún lado (quedaría saldo negativo).
+    """
+    logs = []
+    engine = get_engine()
+    try:
+        if monto <= 0:
+            raise ValueError("El monto debe ser mayor a 0.")
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO staging.eliminaciones_ic (periodo, monto, glosa, ingresado_por)
+                VALUES (:p, :m, :g, :u)
+                ON CONFLICT (periodo) DO UPDATE
+                SET monto = EXCLUDED.monto, glosa = EXCLUDED.glosa,
+                    ingresado_por = EXCLUDED.ingresado_por, fecha_ingreso = now()
+            """), {"p": periodo, "m": monto, "g": glosa, "u": ingresado_por})
+            _escribir_elim_fact_real(conn, periodo, monto)
+            lados = _montos_obuma_ic(conn, periodo)
+        _log(logs, f"✓ Eliminación {periodo}: −${monto:,.0f} en venta ACUÑA y en "
+                   "servicios de personal GN")
+        for soc, cta, cc, v in lados:
+            if v < monto - 1:
+                _log(logs, f"⚠ {soc} {cta} {cc} trae ${v:,.0f} desde Obuma en {periodo}, "
+                           f"menos que la eliminación (${monto:,.0f})")
+        _registrar_auditoria(engine, "marts.fact_real", periodo, len(ELIM_IC_LADOS),
+                             "Eliminación intercompany via webapp")
+        return {"ok": True, "logs": logs, "error": None}
+    except Exception as e:
+        _log(logs, f"✗ Error: {e}")
+        return {"ok": False, "logs": logs, "error": str(e)}
+
+
+def eliminar_eliminacion_ic(periodo: str) -> dict:
+    """Quita la eliminación intercompany del mes (staging y marts.fact_real)."""
+    logs = []
+    engine = get_engine()
+    try:
+        with engine.begin() as conn:
+            r = conn.execute(text("DELETE FROM staging.eliminaciones_ic WHERE periodo = :p"),
+                             {"p": periodo})
+            _escribir_elim_fact_real(conn, periodo, 0)
+        _log(logs, f"Eliminación intercompany {periodo} quitada ({r.rowcount} fila)")
+        return {"ok": True, "logs": logs, "error": None}
+    except Exception as e:
+        _log(logs, f"✗ Error: {e}")
+        return {"ok": False, "logs": logs, "error": str(e)}
+
+
+def _aviso_intercompany(engine, periodo: str, logs: list) -> None:
+    """Tras cargar un mes, avisa si GN trae servicios de personal sin eliminación registrada."""
+    try:
+        with engine.connect() as conn:
+            gn = conn.execute(text("""
+                SELECT COALESCE(SUM(valor), 0) FROM marts.fact_real
+                WHERE periodo = :p AND sociedad = :s AND codigo_cuenta = :c AND fuente = 'OBUMA'
+            """), {"p": periodo, "s": SOC_GRAN_NATURAL, "c": ELIM_IC_LADOS[1][1]}).scalar()
+            elim = conn.execute(text(
+                "SELECT monto FROM staging.eliminaciones_ic WHERE periodo = :p"),
+                {"p": periodo}).scalar()
+    except Exception:
+        return  # el aviso no debe romper la carga
+    gn, elim = float(gn or 0), float(elim or 0)
+    if gn and not elim:
+        _log(logs, f"⚠ GN trae ${gn:,.0f} en Servicios de Personal en {periodo} y no hay "
+                   "eliminación intercompany registrada (Cargar Datos → Intercompany)")
+    elif elim and abs(gn - elim) > 1:
+        _log(logs, f"⚠ Eliminación intercompany {periodo} (${elim:,.0f}) distinta a lo que "
+                   f"trae GN en Servicios de Personal (${gn:,.0f})")
 
 
 # ═══════════════════════════════════════════════════════════════
