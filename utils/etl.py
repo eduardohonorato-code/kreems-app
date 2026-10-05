@@ -39,7 +39,10 @@ MAPA_CC_GN = {
     "PRODUCCION":     "CC-04",
 }
 
-assert {cc for cc in MAPA_CC_ACUNA.values() if cc} <= set(MAPA_CC_GN.values()),     "ACUÑA debe homologarse a los mismos CC de Gran Natural"
+CC_INGRESOS = "CC-00"   # ventas y otros ingresos no se abren por centro de costo
+
+assert {cc for cc in MAPA_CC_ACUNA.values() if cc} <= set(MAPA_CC_GN.values()), \
+    "ACUÑA debe homologarse a los mismos CC de Gran Natural"
 
 HOJAS_CC_PPTO = {
     "ADMINISTRACIÓN": "CC-01",
@@ -294,6 +297,13 @@ def _cargar_fact_real(engine, df: pd.DataFrame, periodo: str, sociedad: str,
     Reemplaza el mes de la sociedad en marts.fact_real con df (codigo_cuenta,
     codigo_cc, valor). Excluye la cuenta CV y preserva fuente='CV_MANUAL'.
     """
+    # Los ingresos (4.x) van siempre a CC-00: los centros de costo son de gasto.
+    # ACUÑA registraba parte de sus ventas en su CC "Ventas" (→ CC-02).
+    df = df.copy()
+    df.loc[df["codigo_cuenta"].str.startswith("4."), "codigo_cc"] = CC_INGRESOS
+    df = df.groupby(["codigo_cuenta", "codigo_cc"], as_index=False)["valor"].sum()
+    df = df[df["valor"] != 0]
+
     # Cuenta 3.1.01.001: se gestiona exclusivamente via staging.cv_real_manual
     cv = df[df["codigo_cuenta"] == CODIGO_CUENTA_CV]
     if not cv.empty:

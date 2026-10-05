@@ -1,14 +1,21 @@
 """
-Reporte de Gerencia — Real vs Presupuesto por centro de costo, con análisis de brechas.
+Reporte de Gerencia — Real vs Presupuesto, con análisis de desviaciones.
 
-Consolida en un solo entregable lo que hoy está repartido en EERR, Centro de Costos
-y Control por Cuenta: P&L acumulado contra el presupuesto de los MISMOS meses,
-puente de EBIT descompuesto, apertura por centro de costo y clasificación
-automática de cada brecha (recurrente / puntual / desfase / no presupuestada).
+Responde primero "¿cómo vamos?" (titular, indicadores, tendencia de los últimos
+meses, principales desviaciones a favor y en contra, cierre del año en dos
+escenarios) y después entrega el detalle para buscar desviaciones: P&L, puente
+de EBIT, gasto controlable por centro de costo, cuenta × centro de costo,
+plan de acción comentado y mes a mes.
 
 Dos salidas desde la misma estructura de datos (`construir_reporte`):
-  - `to_excel(rep)` → workbook corporativo, una hoja por bloque de análisis.
-  - `to_html(rep)`  → página autocontenida con los insights, para leer sin Excel.
+  - `to_excel(rep)` → workbook corporativo (hoja 0 = resumen para gerencia).
+  - `to_html(rep)`  → página autocontenida, legible en celular e imprimible.
+
+Convenciones:
+  - «Desvío» lleva siempre el signo del efecto sobre el resultado:
+    positivo = favorable (se vendió más o se gastó menos), negativo = desfavorable.
+  - Montos en formato chileno ($804,9M; −$62,7M).
+  - Ventas = cuentas de venta (4.1); otros ingresos van en su propia línea.
 
 Toda la lógica de cálculo es pura (recibe DataFrames, no toca Streamlit) para
 poder validarla contra la base sin levantar la app.
@@ -18,6 +25,7 @@ from __future__ import annotations
 import html as _html
 import io
 import math
+import re
 from datetime import datetime
 
 import pandas as pd
@@ -27,11 +35,7 @@ from utils.components import (
     NOMBRES_CC, SOC_ACUNA, SOC_GRAN_NATURAL, ETIQUETA_SOCIEDAD,
 )
 
-# Etiqueta corta de sociedad para las columnas angostas del detalle
-_SOC_CORTA = {SOC_ACUNA: "AC", SOC_GRAN_NATURAL: "GN"}
-
 # CC-00 no es un centro de costo: ahí cuelgan las ventas y el costo variable.
-# Se le pone una etiqueta explícita para que no aparezca como "Ninguno".
 CC_SIN_ASIGNAR = "CC-00"
 ETIQUETA_CC_SIN_ASIGNAR = "Sin centro de costo"
 
@@ -45,6 +49,7 @@ def _label_cc(codigo: str, nombre_fallback: str = "") -> str:
 def _plural(n: int, singular: str, plural: str) -> str:
     return f"{n} {singular if n == 1 else plural}"
 
+
 # ── CONSTANTES ────────────────────────────────────────────────
 
 ABREV_MES = {
@@ -57,6 +62,7 @@ LINEAS_PL = [
     ("Ventas",                  "INGRESO",        None),
     ("Costo de Venta",          "COSTO_VAR",      None),
     ("Utilidad Bruta",          None,             "UB"),
+    ("Otros Ingresos",          "OTRO_INGRESO",   None),
     ("Costo Fijo",              "COSTO_FIJO",     None),
     ("OPEX",                    "OPEX",           None),
     ("EBIT",                    None,             "EBIT"),
@@ -65,11 +71,15 @@ LINEAS_PL = [
     ("Utilidad Neta",           None,             "UN"),
 ]
 
-CLASIFS = ["INGRESO", "COSTO_VAR", "COSTO_FIJO", "OPEX", "FINANCIERO", "NO_OPERACIONAL"]
+CLASIFS = ["INGRESO", "OTRO_INGRESO", "COSTO_VAR", "COSTO_FIJO", "OPEX",
+           "FINANCIERO", "NO_OPERACIONAL"]
+INGRESOS = ("INGRESO", "OTRO_INGRESO")
+# Gasto que se controla por centro de costo (sin costo variable ni financieros)
+CONTROLABLE = ("COSTO_FIJO", "OPEX")
 
-# Nombre legible de cada clasificación para las tablas de detalle
 ETIQUETA_LINEA = {
     "INGRESO": "Ventas",
+    "OTRO_INGRESO": "Otros Ingresos",
     "COSTO_VAR": "Costo de Venta",
     "COSTO_FIJO": "Costo Fijo",
     "OPEX": "OPEX",
@@ -79,6 +89,8 @@ ETIQUETA_LINEA = {
 
 # Umbral de materialidad por defecto: bajo esto una brecha no se comenta.
 UMBRAL_DEFECTO = 1_000_000
+# Meses que definen la "tendencia reciente" para el segundo escenario de cierre
+MESES_TENDENCIA = 3
 
 # Paleta corporativa (misma de la app)
 C_MORADO = "2D0050"
@@ -88,6 +100,53 @@ C_VERDE = "0F6E56"
 C_ROJO = "CC0000"
 C_LILA_BG = "F3E9F7"
 C_GRIS = "94A3B8"
+
+_ACRONIMOS = {"I+D", "EPP", "IVA", "AFP", "LC", "T/C", "SII", "CC"}
+
+
+# ── FORMATO (chileno) ─────────────────────────────────────────
+
+def _num(x: float, dec: int = 1) -> str:
+    """1234567.8 → '1.234.567,8'."""
+    s = f"{abs(x):,.{dec}f}"
+    return s.replace(",", "§").replace(".", ",").replace("§", ".")
+
+
+def _es_nulo(v) -> bool:
+    return v is None or (isinstance(v, float) and math.isnan(v))
+
+
+def fmt_m(v, signo: bool = False) -> str:
+    """Millones: '$804,9M', '−$62,7M'; con signo=True los positivos llevan '+'."""
+    if _es_nulo(v):
+        return "—"
+    r = round(float(v) / 1e6, 1)
+    if r == 0:
+        return "$0,0M"
+    pre = "−" if r < 0 else ("+" if signo else "")
+    return f"{pre}${_num(r)}M"
+
+
+def fmt_pct(v, dec: int = 0) -> str:
+    if _es_nulo(v):
+        return "—"
+    pct = float(v) * 100
+    if 0 < abs(pct) < 1:
+        dec = max(dec, 1)
+    pre = "−" if round(pct, dec) < 0 else ""
+    return f"{pre}{_num(pct, dec)}%"
+
+
+def nombre_legible(nombre: str) -> str:
+    """'MANTENCION EQUIPOS DE PRODUCCION' → 'Mantencion equipos de produccion'."""
+    palabras = str(nombre).split()
+    out = []
+    for i, p in enumerate(palabras):
+        if p.upper() in _ACRONIMOS:
+            out.append(p.upper())
+        else:
+            out.append(p.capitalize() if i == 0 else p.lower())
+    return " ".join(out)
 
 
 # ── CARGA DE DATOS ────────────────────────────────────────────
@@ -123,6 +182,16 @@ def cargar_por_sociedad(ano: int, filtro_cc: str = "") -> pd.DataFrame:
         GROUP BY sociedad
         ORDER BY sociedad
     """, {"d": f"{ano}-01", "h": f"{ano}-12"})
+
+
+def cargar_eliminaciones_ic(ano: int) -> pd.DataFrame:
+    """Eliminaciones intercompany del año (para declararlas en la base del reporte)."""
+    return query("""
+        SELECT periodo, monto
+        FROM staging.eliminaciones_ic
+        WHERE periodo LIKE :a
+        ORDER BY periodo
+    """, {"a": f"{ano}-%"})
 
 
 def diagnostico_corte(df: pd.DataFrame, ano: int) -> dict:
@@ -180,6 +249,21 @@ def _pct(r: float, p: float) -> float | None:
     return (r / p) if p and p > 0 else None
 
 
+def _efecto(clasificacion: str, var: float) -> float:
+    """
+    Efecto de una diferencia real − presupuesto sobre el resultado.
+    En ingresos vender más suma; en cualquier gasto, gastar más resta.
+    """
+    return var if clasificacion in INGRESOS else -var
+
+
+def _derivados(x: dict) -> dict:
+    ub = x["INGRESO"] - x["COSTO_VAR"]
+    ebit = ub + x["OTRO_INGRESO"] - x["COSTO_FIJO"] - x["OPEX"]
+    un = ebit - x["FINANCIERO"] - x["NO_OPERACIONAL"]
+    return {"UB": ub, "EBIT": ebit, "UN": un}
+
+
 def _clasificar_brecha(r_mes: list, p_mes: list, umbral: float) -> tuple:
     """
     Clasifica el comportamiento de una cuenta a lo largo de los meses cerrados.
@@ -226,14 +310,9 @@ def _label_sociedad(ac: float, gn: float) -> str:
     """
     De qué sociedad viene el monto: 'ACUÑA 81%', 'Gran Natural 63%' o 'ACUÑA'.
 
-    Siempre lleva el porcentaje de la sociedad que predomina. Nombrarla sola
-    sería falso salvo cuando es exclusiva: Administración, por ejemplo, es 81%
-    ACUÑA pero tiene $16,5M de Gran Natural repartidos en 21 cuentas. El nombre
-    a secas queda reservado para el 100%, que es el único caso en que «solo esa
-    sociedad» es cierto.
-
-    Se usa el valor absoluto para el reparto, porque hay cuentas con reversas
-    (notas de crédito) que dejarían porcentajes sin sentido con el neto.
+    Siempre lleva el porcentaje de la sociedad que predomina; el nombre a secas
+    queda reservado para el 100%. Se usa el valor absoluto para el reparto,
+    porque hay cuentas con reversas (notas de crédito).
     """
     ac, gn = abs(ac), abs(gn)
     total = ac + gn
@@ -248,25 +327,10 @@ def _label_sociedad(ac: float, gn: float) -> str:
 
 
 def _texto_meses(pares: list) -> str:
-    """
-    'Ene +1,8M · Mar +2,1M' — los meses en que la cuenta se salió del
-    presupuesto, con el monto de cada uno. Es la respuesta a "¿cuándo pasó?".
-    """
+    """'Abr −$11,4M · May −$11,0M' — meses en que la cuenta se desvió en contra."""
     if not pares:
         return "—"
-    return " · ".join(
-        f"{ABREV_MES[m]} {'+' if v >= 0 else '−'}{abs(v)/1e6:,.1f}M" for m, v in pares)
-
-
-def _efecto(clasificacion: str, var: float) -> float:
-    """
-    Impacto de la varianza sobre el resultado.
-
-    En ingresos vender más suma; en cualquier gasto, gastar más resta. Se usa la
-    clasificación (y no `signo_presentacion` de dim_cuentas) para que el signo
-    sea siempre coherente con la fórmula del EBIT que usa todo el reporte.
-    """
-    return var if clasificacion == "INGRESO" else -var
+    return " · ".join(f"{ABREV_MES[m]} {fmt_m(v, signo=True)}" for m, v in pares)
 
 
 # ── CONSTRUCCIÓN DEL REPORTE ──────────────────────────────────
@@ -274,28 +338,39 @@ def _efecto(clasificacion: str, var: float) -> float:
 def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
                       sociedad_lbl: str, umbral: float = UMBRAL_DEFECTO,
                       df_soc: pd.DataFrame | None = None,
-                      diag: dict | None = None) -> dict:
+                      diag: dict | None = None,
+                      elim_ic: pd.DataFrame | None = None,
+                      notas: dict | None = None) -> dict:
     """
     Arma todos los bloques del reporte a partir del detalle anual.
 
     `df` viene de `cargar_movimientos` (año completo). `mes_corte` define el YTD:
     el real se compara contra el presupuesto de esos MISMOS meses, nunca contra
-    el presupuesto anual — esa comparación es la que hace ver toda la ejecución
-    artificialmente baja.
+    el presupuesto anual. `notas` = {(codigo_cuenta, codigo_cc): {...}} con los
+    comentarios del plan de acción (utils.notas.obtener_notas_desvio).
     """
+    notas = notas or {}
     d = df.copy()
     d["mes"] = _mes(d["periodo"])
     d["real"] = pd.to_numeric(d["real"], errors="coerce").fillna(0.0)
     d["ppto"] = pd.to_numeric(d["ppto"], errors="coerce").fillna(0.0)
+    d["clasificacion"] = d["clasificacion"].fillna("SIN_CLASIFICAR")
+    # Ventas = cuentas de venta; el resto de los ingresos operacionales va aparte
+    es_oi = (d["clasificacion"] == "INGRESO") & (d["categoria_eerr"] != "Ventas Brutas")
+    d.loc[es_oi, "clasificacion"] = "OTRO_INGRESO"
+    # Ingresos clasificados como no operacionales (4.2.x): restan del gasto no operacional
+    ing_noop = (d["clasificacion"] == "NO_OPERACIONAL") & d["codigo_cuenta"].str.startswith("4.")
+    d.loc[ing_noop, ["real", "ppto"]] *= -1
 
     meses = list(range(1, mes_corte + 1))
     etiquetas_mes = [ABREV_MES[m] for m in meses]
     ytd = d[d["mes"] <= mes_corte]
     resto = d[d["mes"] > mes_corte]
+    k = min(MESES_TENDENCIA, mes_corte)
+    reciente = d[(d["mes"] > mes_corte - k) & (d["mes"] <= mes_corte)]
+    rec_lbl = (f"{ABREV_MES[mes_corte - k + 1]}–{ABREV_MES[mes_corte]}"
+               if k > 1 else ABREV_MES.get(mes_corte, ""))
 
-    # Reparto del real entre sociedades: el presupuesto es consolidado, pero el
-    # real se factura en una u otra según la cuenta, y saber cuál importa
-    # (ACUÑA está en quiebra y se está vaciando hacia Gran Natural).
     def _mix(claves: list, frame: pd.DataFrame) -> pd.DataFrame:
         piv = frame.pivot_table(index=claves, columns="sociedad", values="real",
                                 aggfunc="sum", fill_value=0.0)
@@ -305,53 +380,51 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
         return piv
 
     mix_cta = _mix(["codigo_cc", "codigo_cuenta"], ytd)
-    # El resumen por centro de costo muestra solo gasto, así que su reparto por
-    # sociedad tiene que calcularse sobre el mismo universo: incluir las ventas
-    # daría un porcentaje que no corresponde al monto de la fila.
-    mix_cc = _mix(["codigo_cc"], ytd[ytd["clasificacion"] != "INGRESO"])
-    # Para la cabecera se usa la facturación, no el real total: mezclar ventas
-    # y gastos en un mismo porcentaje no dice nada. La pregunta de gerencia es
-    # cuánto del negocio sigue facturándose en ACUÑA.
+    ctrl_ytd = ytd[ytd["clasificacion"].isin(CONTROLABLE)]
+    mix_cc = _mix(["codigo_cc"], ctrl_ytd)
     _vta = ytd[ytd["clasificacion"] == "INGRESO"]
     vta_ac = float(_vta.loc[_vta["sociedad"] == SOC_ACUNA, "real"].sum())
     vta_gn = float(_vta.loc[_vta["sociedad"] == SOC_GRAN_NATURAL, "real"].sum())
 
     # ── 1. P&L YTD por clasificación ──────────────────────────
-    def _tot(frame: pd.DataFrame, clasif: str, col: str) -> float:
-        return float(frame.loc[frame["clasificacion"] == clasif, col].sum())
+    def _tot(frame: pd.DataFrame, col: str) -> dict:
+        return {c: float(frame.loc[frame["clasificacion"] == c, col].sum()) for c in CLASIFS}
 
-    R = {c: _tot(ytd, c, "real") for c in CLASIFS}
-    P = {c: _tot(ytd, c, "ppto") for c in CLASIFS}
-    PA = {c: _tot(d, c, "ppto") for c in CLASIFS}          # presupuesto anual
-    PR = {c: _tot(resto, c, "ppto") for c in CLASIFS}      # presupuesto restante
+    R, P = _tot(ytd, "real"), _tot(ytd, "ppto")
+    PA, PR = _tot(d, "ppto"), _tot(resto, "ppto")
+    RK, PK = _tot(reciente, "real"), _tot(reciente, "ppto")
+    # Ritmo reciente de cada línea: real / presupuesto de los últimos k meses
+    RITMO = {c: (RK[c] / PK[c]) if PK[c] > 0 else 1.0 for c in CLASIFS}
+    TR = {c: PR[c] * RITMO[c] for c in CLASIFS}             # restante según tendencia
+    CP = {c: R[c] + PR[c] for c in CLASIFS}                  # cierre según ppto
+    CT = {c: R[c] + TR[c] for c in CLASIFS}                  # cierre según tendencia
 
-    def _derivados(x: dict) -> dict:
-        ub = x["INGRESO"] - x["COSTO_VAR"]
-        ebit = ub - x["COSTO_FIJO"] - x["OPEX"]
-        un = ebit - x["FINANCIERO"] - x["NO_OPERACIONAL"]
-        return {"UB": ub, "EBIT": ebit, "UN": un}
-
-    DR, DP, DPA, DPR = _derivados(R), _derivados(P), _derivados(PA), _derivados(PR)
+    DR, DP, DPA = _derivados(R), _derivados(P), _derivados(PA)
+    DRK, DPK = _derivados(RK), _derivados(PK)
+    DCP, DCT = _derivados(CP), _derivados(CT)
 
     filas_pl = []
     for etiqueta, clasif, sub in LINEAS_PL:
         rv = R[clasif] if clasif else DR[sub]
         pv = P[clasif] if clasif else DP[sub]
         pa = PA[clasif] if clasif else DPA[sub]
-        var = rv - pv
         filas_pl.append({
             "Línea": etiqueta,
             "Real YTD": rv,
             "Ppto YTD": pv,
-            "Varianza": var,
-            "Impacto resultado": _efecto(clasif or "SUBTOTAL", var) if clasif else var,
+            "Desvío": _efecto(clasif, rv - pv) if clasif else rv - pv,
             "% Ejec.": _pct(rv, pv),
             "% s/Ventas": (rv / R["INGRESO"]) if R["INGRESO"] else None,
             "Ppto Año": pa,
-            "% Ppto Año consumido": _pct(rv, pa),
+            # Con resultado negativo, "% del presupuesto anual consumido" no significa nada
+            "% Ppto Año consumido": _pct(rv, pa) if (clasif or rv > 0) else None,
             "_subtotal": sub is not None,
+            "_clasif": clasif or sub,
         })
     df_pl = pd.DataFrame(filas_pl)
+    # Una línea sin real ni presupuesto en el año no aporta (p. ej. otros ingresos)
+    df_pl = df_pl[df_pl["_subtotal"] | (df_pl["Real YTD"] != 0) | (df_pl["Ppto Año"] != 0)]
+    df_pl = df_pl.reset_index(drop=True)
 
     margenes = []
     for nombre, clave in [("Margen Bruto", "UB"), ("Margen EBIT", "EBIT"), ("Margen Neto", "UN")]:
@@ -361,61 +434,59 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
     df_margenes = pd.DataFrame(margenes)
 
     # ── 2. Puente de EBIT ─────────────────────────────────────
-    # Se separan las ventas brutas de otros ingresos y se aísla el efecto del
-    # volumen del efecto de la eficiencia del costo variable: si las ventas caen,
-    # el costo variable cae con ellas y aparecería como "ahorro" si no se ajusta.
-    vb_r = float(ytd.loc[ytd["categoria_eerr"] == "Ventas Brutas", "real"].sum())
-    vb_p = float(ytd.loc[ytd["categoria_eerr"] == "Ventas Brutas", "ppto"].sum())
-    oi_r = R["INGRESO"] - vb_r
-    oi_p = P["INGRESO"] - vb_p
-    tasa_cv = (P["COSTO_VAR"] / vb_p) if vb_p else 0.0
-
-    ef_volumen = (vb_r - vb_p) * (1 - tasa_cv)
-    ef_cv = -(R["COSTO_VAR"] - vb_r * tasa_cv)
-    ef_otros_ing = oi_r - oi_p
+    # El efecto de volumen se valoriza al margen de contribución presupuestado y
+    # el costo variable se mide contra el que correspondería a las ventas reales:
+    # así una caída de ventas no aparece como "ahorro" de costo variable.
+    tasa_cv = (P["COSTO_VAR"] / P["INGRESO"]) if P["INGRESO"] else 0.0
+    ef_volumen = (R["INGRESO"] - P["INGRESO"]) * (1 - tasa_cv)
+    ef_cv = -(R["COSTO_VAR"] - R["INGRESO"] * tasa_cv)
+    ef_otros_ing = R["OTRO_INGRESO"] - P["OTRO_INGRESO"]
 
     puente = [
-        {"Concepto": "EBIT Presupuestado YTD", "Efecto": DP["EBIT"], "Tipo": "inicio"},
-        {"Concepto": "Ventas — volumen / precio", "Efecto": ef_volumen, "Tipo": "efecto"},
-        {"Concepto": "Costo variable — eficiencia y mix", "Efecto": ef_cv, "Tipo": "efecto"},
+        {"Concepto": "EBIT presupuestado", "Efecto": DP["EBIT"], "Tipo": "inicio"},
+        {"Concepto": "Ventas (volumen y precio)", "Efecto": ef_volumen, "Tipo": "efecto"},
+        {"Concepto": "Costo variable (eficiencia y mix)", "Efecto": ef_cv, "Tipo": "efecto"},
     ]
     if abs(ef_otros_ing) > 0:
         puente.append({"Concepto": "Otros ingresos", "Efecto": ef_otros_ing, "Tipo": "efecto"})
 
-    ccs = sorted(set(d["codigo_cc"].dropna()) - {"CC-00"})
+    ccs = sorted(set(d["codigo_cc"].dropna()) - {CC_SIN_ASIGNAR})
+    ef_ctrl = 0.0
     for clasif, etiqueta in [("COSTO_FIJO", "Costo fijo"), ("OPEX", "OPEX")]:
         for cc in ccs:
             sub = ytd[(ytd["clasificacion"] == clasif) & (ytd["codigo_cc"] == cc)]
             v = float(sub["real"].sum() - sub["ppto"].sum())
             if abs(v) < 1:
                 continue
-            puente.append({"Concepto": f"{etiqueta} — {NOMBRES_CC.get(cc, cc)}",
+            puente.append({"Concepto": f"{etiqueta} {NOMBRES_CC.get(cc, cc)}",
                            "Efecto": -v, "Tipo": "efecto"})
-        # Gasto de la clasificación que no cuelga de un CC operativo
+            ef_ctrl -= v
         sub0 = ytd[(ytd["clasificacion"] == clasif) & (~ytd["codigo_cc"].isin(ccs))]
         v0 = float(sub0["real"].sum() - sub0["ppto"].sum())
         if abs(v0) >= 1:
-            puente.append({"Concepto": f"{etiqueta} — sin centro de costo",
+            puente.append({"Concepto": f"{etiqueta} sin centro de costo",
                            "Efecto": -v0, "Tipo": "efecto"})
+            ef_ctrl -= v0
 
-    puente.append({"Concepto": "EBIT Real YTD", "Efecto": DR["EBIT"], "Tipo": "fin"})
+    puente.append({"Concepto": "EBIT real", "Efecto": DR["EBIT"], "Tipo": "fin"})
     df_puente = pd.DataFrame(puente)
-
-    # Control de cuadratura: los efectos deben llevar del EBIT ppto al EBIT real.
     suma_efectos = float(df_puente.loc[df_puente["Tipo"] == "efecto", "Efecto"].sum())
     descuadre = DP["EBIT"] + suma_efectos - DR["EBIT"]
 
-    # ── 3. Centros de costo ───────────────────────────────────
-    gasto_ytd = ytd[ytd["clasificacion"] != "INGRESO"]
-    gasto_anual = d[d["clasificacion"] != "INGRESO"]
+    # ── 3. Gasto controlable por centro de costo ──────────────
+    ctrl = d[d["clasificacion"].isin(CONTROLABLE)]
     filas_cc = []
-    for cc in sorted(set(gasto_ytd["codigo_cc"].dropna())):
-        s = gasto_ytd[gasto_ytd["codigo_cc"] == cc]
-        rv, pv = float(s["real"].sum()), float(s["ppto"].sum())
-        pa = float(gasto_anual.loc[gasto_anual["codigo_cc"] == cc, "ppto"].sum())
-        pr = float(gasto_anual.loc[(gasto_anual["codigo_cc"] == cc) &
-                                   (gasto_anual["mes"] > mes_corte), "ppto"].sum())
-        run_rate = (rv / mes_corte * 12) if mes_corte else 0.0
+    for cc in sorted(set(ctrl["codigo_cc"].dropna())):
+        s = ctrl[ctrl["codigo_cc"] == cc]
+        sy = s[s["mes"] <= mes_corte]
+        rv, pv = float(sy["real"].sum()), float(sy["ppto"].sum())
+        pa = float(s["ppto"].sum())
+        pr = float(s.loc[s["mes"] > mes_corte, "ppto"].sum())
+        sk = s[(s["mes"] > mes_corte - k) & (s["mes"] <= mes_corte)]
+        rk, pk = float(sk["real"].sum()), float(sk["ppto"].sum())
+        ritmo = (rk / pk) if pk > 0 else 1.0
+        if rv == 0 and pv == 0 and pa == 0:
+            continue
         filas_cc.append({
             "Centro de costo": _label_cc(cc, s["nombre_cc"].iloc[0] if len(s) else cc),
             "Código": cc,
@@ -424,32 +495,27 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
                          if cc in mix_cc.index else "—"),
             "Real YTD": rv,
             "Ppto YTD": pv,
-            "Varianza": rv - pv,
-            "Impacto resultado": -(rv - pv),
+            "Desvío": pv - rv,
             "% Ejec.": _pct(rv, pv),
             "Ppto Año": pa,
             "% Ppto Año consumido": _pct(rv, pa),
-            "Proyección cierre": rv + pr,
-            "Run-rate x12": run_rate,
-            "Desv. proyectada": run_rate - pa,
+            "Cierre según ppto": rv + pr,
+            "Cierre según tendencia": rv + pr * ritmo,
         })
-    df_cc = pd.DataFrame(filas_cc).sort_values("Código").reset_index(drop=True)
+    df_cc = (pd.DataFrame(filas_cc).sort_values("Código").reset_index(drop=True)
+             if filas_cc else pd.DataFrame())
 
-    # Apertura CC × línea del P&L
     filas_ccl = []
-    for cc in sorted(set(gasto_ytd["codigo_cc"].dropna())):
-        for clasif in ["COSTO_FIJO", "OPEX", "FINANCIERO", "NO_OPERACIONAL"]:
-            s = gasto_ytd[(gasto_ytd["codigo_cc"] == cc) & (gasto_ytd["clasificacion"] == clasif)]
-            if s.empty or (s["real"].sum() == 0 and s["ppto"].sum() == 0):
-                continue
+    for cc in sorted(set(ctrl_ytd["codigo_cc"].dropna())):
+        for clasif in CONTROLABLE:
+            s = ctrl_ytd[(ctrl_ytd["codigo_cc"] == cc) & (ctrl_ytd["clasificacion"] == clasif)]
             rv, pv = float(s["real"].sum()), float(s["ppto"].sum())
+            if rv == 0 and pv == 0:
+                continue
             filas_ccl.append({
                 "Centro de costo": _label_cc(cc),
-                "Línea": {"COSTO_FIJO": "Costo Fijo", "OPEX": "OPEX",
-                          "FINANCIERO": "Gastos Financieros",
-                          "NO_OPERACIONAL": "Gastos No Operacionales"}[clasif],
-                "Real YTD": rv, "Ppto YTD": pv, "Varianza": rv - pv,
-                "Impacto resultado": -(rv - pv), "% Ejec.": _pct(rv, pv),
+                "Línea": ETIQUETA_LINEA[clasif],
+                "Real YTD": rv, "Ppto YTD": pv, "Desvío": pv - rv, "% Ejec.": _pct(rv, pv),
             })
     df_cc_linea = pd.DataFrame(filas_ccl)
 
@@ -458,13 +524,15 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
                             values="real", aggfunc="sum", fill_value=0.0)
     piv_p = ytd.pivot_table(index=["codigo_cc", "codigo_cuenta"], columns="mes",
                             values="ppto", aggfunc="sum", fill_value=0.0)
-    meta = (d.groupby(["codigo_cc", "codigo_cuenta"])
-              .agg(nombre_cuenta=("nombre_cuenta", "first"),
-                   nombre_cc=("nombre_cc", "first"),
-                   clasificacion=("clasificacion", "first"),
-                   categoria_eerr=("categoria_eerr", "first"),
-                   ppto_anual=("ppto", "sum"))
-              .reset_index())
+    meta_cta = (d.groupby(["codigo_cc", "codigo_cuenta"])
+                  .agg(nombre_cuenta=("nombre_cuenta", "first"),
+                       nombre_cc=("nombre_cc", "first"),
+                       clasificacion=("clasificacion", "first"),
+                       categoria_eerr=("categoria_eerr", "first"),
+                       ppto_anual=("ppto", "sum")))
+    ppto_resto = resto.groupby(["codigo_cc", "codigo_cuenta"])["ppto"].sum()
+    cols_mes = [f"Desvío {ABREV_MES[m]}" for m in meses]
+    piso = umbral / max(mes_corte, 1)
 
     filas_det = []
     for idx in piv_r.index.union(piv_p.index):
@@ -473,30 +541,20 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
         p_mes = [float(piv_p.loc[idx, m]) if (idx in piv_p.index and m in piv_p.columns) else 0.0
                  for m in meses]
         rv, pv = sum(r_mes), sum(p_mes)
-        if rv == 0 and pv == 0:
+        if (rv == 0 and pv == 0) or idx not in meta_cta.index:
             continue
+        info = meta_cta.loc[idx]
         cc, cuenta = idx
-        info = meta[(meta["codigo_cc"] == cc) & (meta["codigo_cuenta"] == cuenta)]
-        if info.empty:
-            continue
-        info = info.iloc[0]
-        var = rv - pv
         clasif = info["clasificacion"]
-        tipo, mes_pico, n_desv = _clasificar_brecha(r_mes, p_mes, umbral)
-        impacto = _efecto(clasif, var)
-        # Solo se anualizan los gastos: extrapolar ventas x12 en un negocio
-        # estacional (verano) daría una cifra sin sentido.
-        anualizado = (var / mes_corte * 12) if (
-            tipo == "Recurrente" and mes_corte and clasif != "INGRESO") else None
-        pr_cta = float(d.loc[(d["codigo_cc"] == cc) & (d["codigo_cuenta"] == cuenta) &
-                             (d["mes"] > mes_corte), "ppto"].sum())
-
-        # Detalle mes a mes de la brecha: en qué meses se pasó del presupuesto
-        # y por cuánto. Sin esto la brecha anual no se puede accionar.
-        difs = [r_mes[i] - p_mes[i] for i in range(len(meses))]
-        piso = umbral / max(mes_corte, 1)
-        exceso = [(meses[i], difs[i]) for i in range(len(meses))
-                  if _efecto(clasif, difs[i]) < -piso]
+        tipo, mes_pico, _ = _clasificar_brecha(r_mes, p_mes, umbral)
+        desvio = _efecto(clasif, rv - pv)
+        desv_mes = [_efecto(clasif, r_mes[i] - p_mes[i]) for i in range(len(meses))]
+        exceso = [(meses[i], desv_mes[i]) for i in range(len(meses)) if desv_mes[i] < -piso]
+        # Solo se anualizan los gastos recurrentes: extrapolar ventas x12 en un
+        # negocio estacional daría una cifra sin sentido.
+        anualizado = (desvio / mes_corte * 12) if (
+            tipo == "Recurrente" and mes_corte and clasif not in INGRESOS) else None
+        nota = notas.get((cuenta, cc), {})
 
         fila = {
             "Centro de costo": _label_cc(cc, info["nombre_cc"]),
@@ -506,234 +564,244 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
                                          mix_cta.loc[idx, SOC_GRAN_NATURAL])
                          if idx in mix_cta.index else "—"),
             "Línea P&L": ETIQUETA_LINEA.get(clasif, clasif),
-            "_clasif": clasif,
             "Categoría EERR": info["categoria_eerr"],
             "Real YTD": rv,
             "Ppto YTD": pv,
-            "Varianza": var,
-            "Impacto resultado": impacto,
+            "Desvío": desvio,
             "% Ejec.": _pct(rv, pv),
             "Tipo de brecha": tipo,
-            "Meses con desvío desfavorable": _texto_meses(exceso),
-            "Meses desviados": n_desv,
+            "Meses desfavorables": _texto_meses(exceso),
             "Mes pico": ABREV_MES.get(mes_pico, ""),
-            "Impacto anualizado": anualizado,
+            "Si se mantiene 12m": anualizado,
             "Ppto Año": float(info["ppto_anual"]),
-            "Proyección cierre": rv + pr_cta,
-            "_meses_exceso": exceso,
+            "Cierre según ppto": rv + float(ppto_resto.get(idx, 0.0)),
+            "Comentario": nota.get("explicacion", ""),
+            "_clasif": clasif,
+            "_cuenta": cuenta,
+            "_cc": cc,
+            "_nombre": nombre_legible(info["nombre_cuenta"]),
+            "_meses_desfav": exceso,
             "_real_mes": r_mes,
             "_ppto_mes": p_mes,
         }
-        # Varianza de cada mes en columnas propias (real − presupuesto)
         for i, mm in enumerate(meses):
-            fila[f"Var {ABREV_MES[mm]}"] = difs[i]
+            fila[f"Desvío {ABREV_MES[mm]}"] = desv_mes[i]
         filas_det.append(fila)
 
     df_det = pd.DataFrame(filas_det)
     if not df_det.empty:
-        df_det = (df_det.reindex(df_det["Impacto resultado"].abs()
-                                 .sort_values(ascending=False).index)
+        df_det = (df_det.reindex(df_det["Desvío"].abs().sort_values(ascending=False).index)
                   .reset_index(drop=True))
 
-    # ── 5. Plan de acción: Pareto de lo desfavorable ──────────
+    # ── 5. Principales desviaciones y plan de acción ──────────
+    # El costo variable se explica por el volumen en el puente: no se lista aquí.
+    cols_top = ["Cuenta", "Centro de costo", "Real YTD", "Ppto YTD", "Desvío",
+                "Tipo de brecha", "Comentario", "_cuenta", "_cc", "_nombre", "_clasif"]
     if not df_det.empty:
-        desfav = df_det[(df_det["Impacto resultado"] < 0) &
-                        (df_det["Impacto resultado"].abs() >= umbral)].copy()
+        base_top = df_det[df_det["_clasif"] != "COSTO_VAR"]
+        top_desf = base_top[base_top["Desvío"] <= -umbral].nsmallest(5, "Desvío")[cols_top]
+        top_fav = base_top[base_top["Desvío"] >= umbral].nlargest(5, "Desvío")[cols_top]
+        desfav = df_det[df_det["Desvío"] <= -umbral].sort_values("Desvío").copy()
     else:
-        desfav = pd.DataFrame()
+        top_desf = top_fav = desfav = pd.DataFrame()
 
     if not desfav.empty:
-        desfav = desfav.sort_values("Impacto resultado")
-        total_desfav = float(-desfav["Impacto resultado"].sum())
-        desfav["_acum"] = (-desfav["Impacto resultado"]).cumsum()
-        desfav["% acum. brecha"] = desfav["_acum"] / total_desfav if total_desfav else 0.0
-        # Corte Pareto: hasta explicar el 80% de la brecha desfavorable
-        corte = desfav[desfav["_acum"] <= 0.80 * total_desfav]
-        n_pareto = max(len(corte) + 1, min(5, len(desfav)))
+        total_desfav = float(-desfav["Desvío"].sum())
+        acum = (-desfav["Desvío"]).cumsum()
+        # Corte Pareto: hasta explicar el 80% de lo desfavorable (mínimo 5 líneas)
+        n_pareto = max(int((acum <= 0.80 * total_desfav).sum()) + 1, min(5, len(desfav)))
         df_accion = desfav.head(n_pareto).copy()
+        claves = list(zip(df_accion["_cuenta"], df_accion["_cc"]))
+        for col, campo in [("Explicación", "explicacion"), ("Acción comprometida", "accion"),
+                           ("Responsable", "responsable"), ("Fecha compromiso", "fecha")]:
+            df_accion[col] = [notas.get(c, {}).get(campo, None if campo == "fecha" else "")
+                              for c in claves]
+        df_accion = df_accion[[
+            "Centro de costo", "Cuenta", "Sociedad", "Línea P&L", "Real YTD", "Ppto YTD",
+            "Desvío", "Tipo de brecha", "Meses desfavorables", "Si se mantiene 12m",
+            "Explicación", "Acción comprometida", "Responsable", "Fecha compromiso",
+            *cols_mes, "_cuenta", "_cc", "_nombre", "_clasif", "_real_mes", "_ppto_mes",
+        ]].reset_index(drop=True)
     else:
         total_desfav = 0.0
         df_accion = pd.DataFrame()
 
-    cols_var_mes = [f"Var {ABREV_MES[m]}" for m in meses]
-    if not df_accion.empty:
-        df_accion = df_accion[[
-            "Centro de costo", "Cuenta", "Sociedad", "Línea P&L", "Real YTD", "Ppto YTD",
-            "Varianza", "Impacto resultado", "% acum. brecha", "Tipo de brecha",
-            "Meses con desvío desfavorable", "Meses desviados", "Mes pico", "Impacto anualizado",
-            *cols_var_mes,
-        ] + ["_meses_exceso", "_real_mes", "_ppto_mes"]].reset_index(drop=True)
-        for col in ["Explicación (qué pasó)", "Acción comprometida", "Responsable", "Fecha"]:
-            df_accion[col] = ""
-
     # ── 6. Mes a mes ──────────────────────────────────────────
     filas_mm = []
-    for cc in sorted(set(gasto_ytd["codigo_cc"].dropna())):
+    for cc in sorted(set(ctrl_ytd["codigo_cc"].dropna())):
+        s = ctrl_ytd[ctrl_ytd["codigo_cc"] == cc]
+        vals = {}
         for concepto, col in [("Real", "real"), ("Ppto", "ppto")]:
             fila = {"Centro de costo": _label_cc(cc), "Concepto": concepto}
-            s = gasto_ytd[gasto_ytd["codigo_cc"] == cc]
             for m in meses:
                 fila[ABREV_MES[m]] = float(s.loc[s["mes"] == m, col].sum())
             fila["Total YTD"] = sum(fila[ABREV_MES[m]] for m in meses)
+            vals[concepto] = fila
             filas_mm.append(fila)
-        fila_v = {"Centro de costo": _label_cc(cc), "Concepto": "Varianza"}
-        s = gasto_ytd[gasto_ytd["codigo_cc"] == cc]
-        for m in meses:
-            fila_v[ABREV_MES[m]] = float(s.loc[s["mes"] == m, "real"].sum() -
-                                         s.loc[s["mes"] == m, "ppto"].sum())
-        fila_v["Total YTD"] = sum(fila_v[ABREV_MES[m]] for m in meses)
+        fila_v = {"Centro de costo": _label_cc(cc), "Concepto": "Desvío"}
+        for c in [ABREV_MES[m] for m in meses] + ["Total YTD"]:
+            fila_v[c] = vals["Ppto"][c] - vals["Real"][c]
         filas_mm.append(fila_v)
     df_mes_cc = pd.DataFrame(filas_mm)
 
+    def _por_mes(frame: pd.DataFrame, col: str, m: int) -> dict:
+        mm = frame[frame["mes"] == m]
+        base = {c: float(mm.loc[mm["clasificacion"] == c, col].sum()) for c in CLASIFS}
+        return {**base, **_derivados(base)}
+
     filas_plm = []
     for etiqueta, clasif, sub in LINEAS_PL:
+        if etiqueta not in set(df_pl["Línea"]):
+            continue
         for concepto, col in [("Real", "real"), ("Ppto", "ppto")]:
             fila = {"Línea": etiqueta, "Concepto": concepto}
             for m in meses:
-                mm = ytd[ytd["mes"] == m]
-                if clasif:
-                    v = float(mm.loc[mm["clasificacion"] == clasif, col].sum())
-                else:
-                    base = {c: float(mm.loc[mm["clasificacion"] == c, col].sum()) for c in CLASIFS}
-                    v = _derivados(base)[sub]
-                fila[ABREV_MES[m]] = v
+                fila[ABREV_MES[m]] = _por_mes(ytd, col, m)[clasif or sub]
             fila["Total YTD"] = sum(fila[ABREV_MES[m]] for m in meses)
             filas_plm.append(fila)
     df_mes_pl = pd.DataFrame(filas_plm)
 
-    # Mes a mes de las cuentas con brecha material: Real / Ppto / Varianza por
-    # mes. Es el respaldo de "en qué mes se pasó" para cada cuenta comentada.
     filas_ctam = []
     if not df_det.empty:
-        materiales = df_det[df_det["Impacto resultado"].abs() >= umbral]
-        for _, r in materiales.iterrows():
+        for _, r in df_det[df_det["Desvío"].abs() >= umbral].iterrows():
+            desv = [_efecto(r["_clasif"], r["_real_mes"][i] - r["_ppto_mes"][i])
+                    for i in range(len(meses))]
             for concepto, serie in [("Real", r["_real_mes"]), ("Ppto", r["_ppto_mes"]),
-                                    ("Varianza", [r["_real_mes"][i] - r["_ppto_mes"][i]
-                                                  for i in range(len(meses))])]:
-                fila = {"Centro de costo": r["Centro de costo"],
-                        "Cuenta": r["Cuenta"], "Concepto": concepto}
+                                    ("Desvío", desv)]:
+                fila = {"Centro de costo": r["Centro de costo"], "Cuenta": r["Cuenta"],
+                        "Concepto": concepto}
                 for i, mm in enumerate(meses):
                     fila[ABREV_MES[mm]] = float(serie[i])
                 fila["Total YTD"] = float(sum(serie))
                 filas_ctam.append(fila)
     df_mes_cuenta = pd.DataFrame(filas_ctam)
 
-    # ── 7. Proyección al cierre ───────────────────────────────
+    # Serie de los 12 meses para los gráficos: real hasta el corte, ppto todo el año
+    serie = []
+    for m in range(1, 13):
+        rr, pp = _por_mes(d, "real", m), _por_mes(d, "ppto", m)
+        serie.append({
+            "Mes": ABREV_MES[m], "mes": m,
+            "Ventas real": rr["INGRESO"] if m <= mes_corte else None,
+            "Ventas ppto": pp["INGRESO"],
+            "EBIT real": rr["EBIT"] if m <= mes_corte else None,
+            "EBIT ppto": pp["EBIT"],
+        })
+    df_serie = pd.DataFrame(serie)
+
+    # ── 7. Cierre del año en dos escenarios ───────────────────
     filas_proy = []
     for etiqueta, clasif, sub in LINEAS_PL:
+        if etiqueta not in set(df_pl["Línea"]):
+            continue
         rv = R[clasif] if clasif else DR[sub]
         pa = PA[clasif] if clasif else DPA[sub]
-        pr = PR[clasif] if clasif else DPR[sub]
-        run = (rv / mes_corte * 12) if mes_corte else 0.0
-        proy = rv + pr
+        cp = CP[clasif] if clasif else DCP[sub]
+        ct = CT[clasif] if clasif else DCT[sub]
+        signo = 1 if (clasif in INGRESOS or not clasif) else -1
         filas_proy.append({
             "Línea": etiqueta,
             "Real YTD": rv,
-            "Ppto restante": pr,
-            "Proyección (real + ppto restante)": proy,
-            "Run-rate x12": run,
+            "Ppto restante": PR[clasif] if clasif else _derivados(PR)[sub],
+            f"Ritmo {rec_lbl}": RITMO[clasif] if clasif and PK[clasif] > 0 else None,
+            "Cierre según ppto": cp,
+            "Cierre según tendencia": ct,
             "Ppto Año": pa,
-            "Desv. vs Ppto Año": proy - pa,
+            "Desvío (según ppto)": signo * (cp - pa),
+            "Desvío (según tendencia)": signo * (ct - pa),
             "_subtotal": sub is not None,
         })
     df_proy = pd.DataFrame(filas_proy)
 
-    # ── 8. Bases y alertas ────────────────────────────────────
+    # ── 8. Base de comparación, escalas y criterios ───────────
     alertas = []
+    corte_parcial = bool(diag and diag.get("parcial")
+                         and mes_corte >= diag.get("ultimo_real", 0))
+    if diag and diag.get("parcial"):
+        mes_p = ABREV_MES.get(diag["ultimo_real"], "")
+        if corte_parcial:
+            alertas.append(
+                f"{mes_p} está cargado a medias ({diag['ratio']*100:.0f}% de su presupuesto "
+                f"contra {diag['ratio_previo']*100:.0f}% típico) y este reporte lo INCLUYE: "
+                f"los ahorros de gasto están sobrestimados. Para una lectura firme, cortar en "
+                f"{ABREV_MES.get(diag['sugerido'], '')}.")
+        else:
+            alertas.append(
+                f"{mes_p} está cargado a medias ({diag['ratio']*100:.0f}% de su presupuesto "
+                f"contra {diag['ratio_previo']*100:.0f}% típico): el reporte se corta en "
+                f"{ABREV_MES.get(mes_corte, '')} para no mostrar como ahorro facturas por cargar.")
+
+    if elim_ic is not None and not elim_ic.empty:
+        e = elim_ic.copy()
+        e["mes"] = _mes(e["periodo"])
+        e["monto"] = pd.to_numeric(e["monto"], errors="coerce").fillna(0.0)
+        e = e[e["mes"] <= mes_corte]
+        if not e.empty:
+            detalle_ic = " · ".join(f"{ABREV_MES[int(r.mes)]} {fmt_m(r.monto)}" for r in e.itertuples())
+            alertas.append(
+                f"Las ventas y el costo de personal excluyen {fmt_m(e['monto'].sum())} de "
+                f"facturas intercompany ACUÑA → Gran Natural ({detalle_ic}). No son ventas "
+                f"del negocio: comparar con reportes anteriores puede mostrar diferencias.")
+
     if df_soc is not None and not df_soc.empty:
         s = df_soc.copy()
         s["real"] = pd.to_numeric(s["real"], errors="coerce").fillna(0.0)
         s["ppto"] = pd.to_numeric(s["ppto"], errors="coerce").fillna(0.0)
         sin_ppto = s[(s["ppto"] == 0) & (s["real"] > 0)]["sociedad"].tolist()
         if sin_ppto:
-            con_ppto = s[s["ppto"] > 0]["sociedad"].tolist()
             alertas.append(
-                f"El presupuesto {ano} está cargado íntegramente bajo "
-                f"{', '.join(con_ppto) or '—'}. {', '.join(sin_ppto)} registra real "
-                f"sin presupuesto propio, por lo que la comparación válida es la "
-                f"CONSOLIDADA (ambas sociedades): la operación se factura en una u "
-                f"otra según el mes. Filtrar por una sola sociedad rompe la comparación."
-            )
-    corte_parcial = bool(diag and diag.get("parcial")
-                         and mes_corte >= diag.get("ultimo_real", 0))
-    if diag and diag.get("parcial"):
-        estado = (
-            f"{ABREV_MES.get(diag['ultimo_real'], '')} tiene reales cargados parcialmente "
-            f"({diag['ratio']*100:.0f}% del presupuesto del mes, contra "
-            f"{diag['ratio_previo']*100:.0f}% típico de los meses cerrados). "
-        )
-        if corte_parcial:
+                "El presupuesto es uno solo para el negocio (cargado bajo Gran Natural): "
+                "la comparación válida es la consolidada. Una sociedad sola contra "
+                "presupuesto no es comparable.")
+
+    if not df_det.empty:
+        sin_p = df_det[(df_det["Tipo de brecha"] == "No presupuestado") &
+                       (~df_det["_clasif"].isin(INGRESOS))]
+        if not sin_p.empty:
             alertas.append(
-                estado +
-                f"Este reporte INCLUYE ese mes: los ahorros y la subejecución de gastos "
-                f"están sobrestimados, porque hay facturas del mes todavía sin cargar. "
-                f"Para una lectura firme, cortar en "
-                f"{ABREV_MES.get(diag['sugerido'], '')}; lo que ya aparece SOBRE "
-                f"presupuesto en {ABREV_MES.get(diag['ultimo_real'], '')} sí es real "
-                f"(solo puede aumentar al completarse la carga)."
-            )
-        else:
-            alertas.append(
-                estado +
-                f"El corte se fijó en {ABREV_MES.get(mes_corte, '')} para no mostrar "
-                f"ahorros que en realidad son facturas por cargar."
-            )
+                f"{_plural(len(sin_p), 'cuenta de gasto', 'cuentas de gasto')} con real y sin "
+                f"presupuesto ({fmt_m(sin_p['Real YTD'].sum())} acumulado): requieren "
+                f"presupuesto o reclasificación.")
     if abs(descuadre) > 1:
         alertas.append(f"Descuadre en el puente de EBIT: ${descuadre:,.0f}. Revisar clasificaciones.")
 
-    if not df_det.empty:
-        # Solo gastos: un ingreso sin presupuesto no es un problema de control
-        # presupuestario, es una venta que no estaba en el plan.
-        sin_ppto = df_det[(df_det["Tipo de brecha"] == "No presupuestado") &
-                          (df_det["_clasif"] != "INGRESO")]
-        if not sin_ppto.empty:
-            monto = float(sin_ppto["Real YTD"].sum())
-            alertas.append(
-                f"{_plural(len(sin_ppto), 'cuenta de gasto', 'cuentas de gasto')} con real "
-                f"y sin presupuesto asignado (${monto/1e6:,.1f}M YTD). No tienen contra qué "
-                f"medirse: requieren presupuesto o reclasificación."
-            )
-
-    # El reporte mezcla tres escalas a propósito (acumulada, mensual y anual):
-    # se explicitan para que nadie compare columnas de escalas distintas.
     escalas = [
-        f"ACUMULADO Enero–{ABREV_MES.get(mes_corte, '')} ({mes_corte} de 12 meses) — columnas "
-        f"«Real YTD», «Ppto YTD», «Varianza», «Impacto resultado» y «% Ejec.», más las hojas "
-        f"1 Resumen Ejecutivo y 2 Puente EBIT. El real se compara siempre contra el "
-        f"presupuesto de esos mismos meses.",
-        "VALOR DE CADA MES (no acumulado) — toda la hoja «6 Mes a Mes» y las columnas "
-        "«Var <mes>» de las hojas 4 y 5. En la hoja 6, la columna «Total YTD» es la suma "
-        "de esos meses y cuadra con el «Real YTD» de las demás hojas.",
-        "AÑO COMPLETO (12 meses) — «Ppto Año», «% Ppto Año consumido», «Proyección cierre», "
-        "«Run-rate x12» y «Desv. proyectada», más la hoja 7 Proyección Cierre.",
-        "Las tres escalas conviven a propósito: un centro de costo puede ir sobre-ejecutado "
-        f"contra el presupuesto de {mes_corte} meses y, a la vez, llevar consumido menos de "
-        f"la mitad de su presupuesto anual. Ambas cifras son correctas y miden cosas distintas.",
+        f"Acumulado Ene–{ABREV_MES.get(mes_corte, '')} ({mes_corte} de 12 meses): «Real YTD», "
+        f"«Ppto YTD», «Desvío» y «% Ejec.». El real se compara siempre contra el presupuesto "
+        f"de esos mismos meses, nunca contra el anual.",
+        "Valor de cada mes (no acumulado): gráficos, tablas mes a mes y columnas «Desvío <mes>».",
+        "Año completo: «Ppto Año», «% Ppto Año consumido» y los cierres proyectados. Un centro "
+        "de costo puede ir sobre su presupuesto de los meses transcurridos y, a la vez, llevar "
+        "consumido menos de la mitad del anual: ambas cifras son correctas.",
     ]
 
     bases = [
-        f"Fuente: marts.vw_real_vs_ppto (real desde ERP Obuma; presupuesto editable en la app).",
-        f"El real acumulado se compara contra el presupuesto de los MISMOS meses "
-        f"(Ene–{ABREV_MES.get(mes_corte, '')}), no contra el presupuesto anual.",
-        f"Umbral de materialidad aplicado: ${umbral/1e6:,.1f}M por cuenta y centro de costo.",
-        "Signo: en gastos, varianza positiva = se gastó más que el presupuesto. "
-        "La columna «Impacto resultado» ya viene con el signo del efecto sobre el EBIT.",
-        "Parte del costo de fábrica está en el costo fijo de Producción, no en el costo "
-        "variable: el margen bruto de este reporte es un margen de contribución.",
-        "El costo variable proviene de carga manual (staging.cv_real_manual).",
-        "Cifras en pesos chilenos. El formato «M» muestra millones; el valor de la celda "
-        "está en pesos y es apto para pivotear.",
+        "«Desvío» lleva el signo del efecto sobre el resultado: positivo = favorable "
+        "(se vendió más o se gastó menos), negativo = desfavorable.",
+        "Ventas = cuentas de venta (4.1), registradas sin centro de costo. Otros ingresos "
+        "operacionales van en su propia línea.",
+        "Gasto controlable = costo fijo + OPEX, abierto por centro de costo. El costo de venta "
+        "se explica por el volumen en el puente de EBIT.",
+        f"Cierre según tendencia: el presupuesto de los meses que faltan se ajusta por el ritmo "
+        f"real/presupuesto de cada línea en {rec_lbl}. Cierre según presupuesto: los meses que "
+        f"faltan se cumplen al 100%.",
+        f"Materialidad: {fmt_m(umbral)} por cuenta y centro de costo.",
+        "El margen bruto es un margen de contribución: parte del costo de fábrica está en el "
+        "costo fijo de Producción. El costo de venta proviene de carga manual.",
+        "Fuente: marts.vw_real_vs_ppto (real desde Obuma; presupuesto editable en la app). "
+        "Cifras en pesos chilenos; «M» = millones.",
     ]
 
-    # ── 9. Conclusiones calculadas ────────────────────────────
-    conclusiones = _conclusiones(
-        R, P, DR, DP, PA, DPA, DPR, mes_corte, ef_volumen, ef_cv, ef_otros_ing,
-        df_cc, df_det, umbral, ano, corte_parcial, diag)
+    # ── 9. Titular y conclusiones ─────────────────────────────
+    titular = _titular(R, P, DR, DP, DPA, DRK, DPK, DCP, DCT, RK, PK, rec_lbl, k,
+                       ef_volumen + ef_cv, ef_ctrl, ef_otros_ing, mes_corte,
+                       corte_parcial, diag)
+    conclusiones = _conclusiones(df_cc, df_det, umbral, mes_corte)
 
     _tot_soc = abs(vta_ac) + abs(vta_gn)
-    mix_lbl = (f"{ETIQUETA_SOCIEDAD[SOC_ACUNA]} {vta_ac/1e6:,.0f}M "
+    mix_lbl = (f"{ETIQUETA_SOCIEDAD[SOC_ACUNA]} {fmt_m(vta_ac)} "
                f"({abs(vta_ac)/_tot_soc*100:.0f}%) · "
-               f"{ETIQUETA_SOCIEDAD[SOC_GRAN_NATURAL]} {vta_gn/1e6:,.0f}M "
+               f"{ETIQUETA_SOCIEDAD[SOC_GRAN_NATURAL]} {fmt_m(vta_gn)} "
                f"({abs(vta_gn)/_tot_soc*100:.0f}%)") if _tot_soc else "—"
 
     return {
@@ -741,21 +809,28 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
             "ano": ano, "mes_corte": mes_corte, "n_meses": mes_corte,
             "mix_sociedad": mix_lbl,
             "mes_corte_nombre": ABREV_MES.get(mes_corte, ""),
-            "periodo_lbl": f"Enero–{ABREV_MES.get(mes_corte, '')} {ano}",
+            "periodo_lbl": f"Ene–{ABREV_MES.get(mes_corte, '')} {ano}",
             "sociedad": sociedad_lbl,
             "umbral": umbral,
             "generado": datetime.now().strftime("%d-%m-%Y %H:%M"),
             "meses": etiquetas_mes,
+            "rec_lbl": rec_lbl, "k": k,
         },
         "kpi": {
             "ventas_r": R["INGRESO"], "ventas_p": P["INGRESO"],
             "ub_r": DR["UB"], "ub_p": DP["UB"],
+            "ctrl_r": R["COSTO_FIJO"] + R["OPEX"], "ctrl_p": P["COSTO_FIJO"] + P["OPEX"],
             "ebit_r": DR["EBIT"], "ebit_p": DP["EBIT"],
             "un_r": DR["UN"], "un_p": DP["UN"],
-            "ebit_proy": DR["EBIT"] + DPR["EBIT"], "ebit_ppto_ano": DPA["EBIT"],
-            "gasto_r": sum(R[c] for c in CLASIFS if c != "INGRESO"),
-            "gasto_p": sum(P[c] for c in CLASIFS if c != "INGRESO"),
+            "ebit_cierre_ppto": DCP["EBIT"], "ebit_cierre_tend": DCT["EBIT"],
+            "ebit_ppto_ano": DPA["EBIT"],
+            "ventas_cierre_ppto": CP["INGRESO"], "ventas_cierre_tend": CT["INGRESO"],
+            "ventas_ppto_ano": PA["INGRESO"],
+            "ritmo_ventas": RITMO["INGRESO"],
+            "ebit_rec_r": DRK["EBIT"], "ebit_rec_p": DPK["EBIT"],
         },
+        "titular": titular,
+        "conclusiones": conclusiones,
         "pl": df_pl,
         "margenes": df_margenes,
         "puente": df_puente,
@@ -763,182 +838,155 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
         "cc": df_cc,
         "cc_linea": df_cc_linea,
         "detalle": df_det,
+        "top_desfav": top_desf,
+        "top_fav": top_fav,
         "accion": df_accion,
         "total_desfavorable": total_desfav,
         "mes_cc": df_mes_cc,
         "mes_pl": df_mes_pl,
         "mes_cuenta": df_mes_cuenta,
-        "cols_var_mes": cols_var_mes,
+        "serie": df_serie,
+        "cols_mes": cols_mes,
         "proyeccion": df_proy,
         "alertas": alertas,
         "escalas": escalas,
         "bases": bases,
-        "conclusiones": conclusiones,
     }
 
 
-def _conclusiones(R, P, DR, DP, PA, DPA, DPR, mes_corte, ef_vol, ef_cv, ef_oi,
-                  df_cc, df_det, umbral, ano, corte_parcial=False, diag=None) -> list:
-    """Redacta los hallazgos a partir de las cifras. Reglas deterministas: el
-    mismo dato produce siempre el mismo texto (no interviene la IA)."""
-    def m(v):
-        return f"${v/1e6:,.1f}M"
+def _titular(R, P, DR, DP, DPA, DRK, DPK, DCP, DCT, RK, PK, rec_lbl, k,
+             ef_ventas, ef_ctrl, ef_oi, mes_corte, corte_parcial, diag) -> list:
+    """
+    La respuesta a "¿cómo vamos con el presupuesto?" en 3-4 frases: resultado
+    acumulado, qué lo explica, hacia dónde va la tendencia y cómo cerraría el año.
+    Reglas deterministas: el mismo dato produce siempre el mismo texto.
+    """
+    if not any(P.values()):
+        return [f"Esta selección no tiene presupuesto cargado: el EBIT real acumulado es "
+                f"{fmt_m(DR['EBIT'])} y no hay contra qué medirlo. Usa la vista consolidada."]
 
     out = []
-    if not any(P.values()):
-        # Selección sin presupuesto cargado (p. ej. una sociedad sola): no hay
-        # comparación posible, decirlo antes que cualquier otra cifra.
-        out.append(
-            f"Esta selección no tiene presupuesto cargado para el periodo: el EBIT real "
-            f"acumulado es {m(DR['EBIT'])} y no hay contra qué medirlo. Para el control "
-            f"presupuestario usa la vista consolidada."
-        )
-        return out
+    gap = DR["EBIT"] - DP["EBIT"]
+    out.append(
+        f"EBIT acumulado {fmt_m(DR['EBIT'])} contra {fmt_m(DP['EBIT'])} presupuestado: "
+        f"vamos {fmt_m(abs(gap))} {'mejor' if gap >= 0 else 'peor'} que el presupuesto "
+        f"de Ene–{ABREV_MES.get(mes_corte, '')}.")
+
+    pct_v = _pct(R["INGRESO"], P["INGRESO"])
+    piezas = [(f"ventas y costo de venta {fmt_m(ef_ventas, signo=True)}"
+               f" (ventas al {fmt_pct(pct_v)} del presupuesto)", ef_ventas),
+              (f"gasto controlable {fmt_m(ef_ctrl, signo=True)}"
+               f" ({'bajo' if ef_ctrl >= 0 else 'sobre'} presupuesto)", ef_ctrl)]
+    if abs(ef_oi) >= 1e6:
+        piezas.append((f"otros ingresos {fmt_m(ef_oi, signo=True)}", ef_oi))
+    piezas.sort(key=lambda x: abs(x[1]), reverse=True)
+    out.append("Lo explican: " + "; ".join(p for p, _ in piezas) + ".")
+
+    if k >= 2 and PK["INGRESO"] > 0:
+        gap_k = DRK["EBIT"] - DPK["EBIT"]
+        ritmo = RK["INGRESO"] / PK["INGRESO"]
+        frase = (f"Últimos {k} meses ({rec_lbl}): ventas al {fmt_pct(ritmo)} del presupuesto "
+                 f"y EBIT {fmt_m(gap_k, signo=True)} contra el presupuesto de esos meses")
+        if (gap_k < 0) != (gap < 0):
+            frase += " — la tendencia reciente va en sentido contrario al acumulado"
+        out.append(frase + ".")
+
+    out.append(
+        f"Cierre del año: EBIT {fmt_m(DCT['EBIT'])} si se mantiene el ritmo de {rec_lbl}, "
+        f"{fmt_m(DCP['EBIT'])} si se cumple el presupuesto de los meses que faltan "
+        f"(presupuesto anual {fmt_m(DPA['EBIT'])}).")
 
     if corte_parcial and diag:
-        # El corte incluye un mes a medio cargar: la advertencia va primero,
-        # porque teñe todas las cifras de gasto que vienen después.
-        out.append(
-            f"LECTURA CONDICIONADA: el acumulado incluye {ABREV_MES.get(diag['ultimo_real'], '')}, "
-            f"que está cargado parcialmente ({diag['ratio']*100:.0f}% de su presupuesto contra "
-            f"{diag['ratio_previo']*100:.0f}% típico). Los ahorros de gasto que se leen abajo "
-            f"están sobrestimados y bajarán al completarse la carga. Lo que ya aparece SOBRE "
-            f"presupuesto en ese mes sí es firme: solo puede subir."
-        )
+        out.insert(0, f"Lectura condicionada: {ABREV_MES.get(diag['ultimo_real'], '')} está "
+                      f"cargado a medias, los ahorros de gasto están sobrestimados.")
+    return out
 
-    gap_ebit = DR["EBIT"] - DP["EBIT"]
-    signo = "sobre" if gap_ebit >= 0 else "bajo"
-    if DP["EBIT"] > 0:
-        cierre = f"({DR['EBIT'] / DP['EBIT'] * 100:.0f}% de cumplimiento)"
-    else:
-        # El presupuesto de estos meses ya contemplaba pérdida operacional: el
-        # porcentaje de cumplimiento no aporta, la lectura es la brecha en pesos.
-        cierre = ("— el presupuesto de estos meses ya contemplaba resultado operacional "
-                  "negativo, propio de la estacionalidad del negocio")
-    out.append(
-        f"EBIT acumulado de {m(DR['EBIT'])} contra {m(DP['EBIT'])} presupuestados "
-        f"para los mismos {mes_corte} meses: {m(abs(gap_ebit))} {signo} el objetivo "
-        f"{cierre}."
-    )
 
-    # Qué explica la brecha
-    gastos = [(r["Centro de costo"], float(r["Impacto resultado"])) for _, r in df_cc.iterrows()]
-    ef_gastos = sum(v for _, v in gastos)
-    piezas = [("mayores/menores ventas", ef_vol), ("costo variable", ef_cv),
-              ("otros ingresos", ef_oi), ("gastos por centro de costo", ef_gastos)]
-    piezas = sorted([p for p in piezas if abs(p[1]) >= umbral],
-                    key=lambda x: abs(x[1]), reverse=True)
-    if piezas:
-        detalle = "; ".join(
-            f"{nombre} {'+' if v >= 0 else '−'}{m(abs(v))}" for nombre, v in piezas)
-        out.append(f"Descomposición de la brecha de EBIT: {detalle}.")
-
-    # Centro de costo que más pesa (CC-00 no es un centro de costo: son las
-    # ventas y el costo variable, ya explicados en la descomposición anterior)
-    cc_op = df_cc[df_cc["Código"] != CC_SIN_ASIGNAR] if not df_cc.empty else df_cc
-    if not cc_op.empty:
-        cc_ord = cc_op.reindex(cc_op["Impacto resultado"].abs().sort_values(ascending=False).index)
-        top_cc = cc_ord.iloc[0]
-        imp = float(top_cc["Impacto resultado"])
-        sentido = "sobregasto" if imp < 0 else "ahorro"
-        pct_ej = top_cc["% Ejec."]
-        pct_txt = f"{pct_ej*100:.0f}% de ejecución" if pd.notna(pct_ej) and pct_ej is not None else "sin presupuesto"
-        out.append(
-            f"{top_cc['Centro de costo']} es el centro de costo con mayor desvío: "
-            f"{m(abs(imp))} de {sentido} ({pct_txt}); consumió el "
-            f"{(top_cc['% Ppto Año consumido'] or 0)*100:.0f}% de su presupuesto anual "
-            f"con {mes_corte} de 12 meses."
-        )
-
-    # Estructural vs desfase
-    if not df_det.empty:
-        desf = df_det[df_det["Impacto resultado"] < -umbral]
-        rec = desf[desf["Tipo de brecha"] == "Recurrente"]
-        pun = desf[desf["Tipo de brecha"] == "Puntual"]
-        nop = desf[desf["Tipo de brecha"] == "No presupuestado"]
-        if not desf.empty:
-            partes = []
-            if not rec.empty:
-                partes.append(
-                    f"{m(abs(rec['Impacto resultado'].sum()))} es sobregasto recurrente "
-                    f"({_plural(len(rec), 'cuenta', 'cuentas')}, "
-                    f"{m(abs(rec['Impacto anualizado'].sum()))} de impacto si se mantiene "
-                    f"los 12 meses)")
-            if not pun.empty:
-                partes.append(f"{m(abs(pun['Impacto resultado'].sum()))} son eventos puntuales "
-                              f"({_plural(len(pun), 'cuenta', 'cuentas')})")
-            if not nop.empty:
-                partes.append(f"{m(abs(nop['Impacto resultado'].sum()))} corresponde a gasto "
-                              f"no presupuestado ({_plural(len(nop), 'cuenta', 'cuentas')})")
-            if partes:
-                out.append("Del desvío desfavorable acumulado: " + "; ".join(partes) + ".")
-
-        # Top 3 cuentas
-        top3 = df_det[df_det["Impacto resultado"] < 0].head(3)
-        if not top3.empty:
-            items = "; ".join(
-                f"{r['Cuenta']} ({r['Centro de costo']}) {m(abs(r['Impacto resultado']))} — "
-                f"{r['Tipo de brecha'].lower()}"
-                + (f", con desvío en contra en {r['Meses con desvío desfavorable']}"
-                   if r["Meses con desvío desfavorable"] != "—" else "")
-                for _, r in top3.iterrows())
-            out.append(f"Cuentas que más restan al resultado: {items}.")
-
-        desfase = df_det[df_det["Tipo de brecha"] == "Desfase de calendario"]
-        if not desfase.empty:
+def _conclusiones(df_cc, df_det, umbral, mes_corte) -> list:
+    """Hallazgos del análisis detallado (complementan el titular)."""
+    out = []
+    if not df_cc.empty:
+        cc_op = df_cc[df_cc["Código"] != CC_SIN_ASIGNAR]
+        if not cc_op.empty:
+            top = cc_op.loc[cc_op["Desvío"].abs().idxmax()]
+            imp = float(top["Desvío"])
             out.append(
-                f"{_plural(len(desfase), 'cuenta muestra', 'cuentas muestran')} desfase de "
-                f"calendario: el acumulado cuadra con el presupuesto pero el gasto cayó en "
-                f"meses distintos a los planificados. No son ahorro ni sobregasto — es "
-                f"calendario, no monto — y conviene corregir la mensualización del presupuesto."
-            )
+                f"{top['Centro de costo']} es el centro de costo con mayor desvío: "
+                f"{fmt_m(imp, signo=True)} ({fmt_pct(top['% Ejec.'])} de ejecución); lleva "
+                f"consumido el {fmt_pct(top['% Ppto Año consumido'])} de su presupuesto anual "
+                f"con {mes_corte} de 12 meses.")
 
-    # Ventas y ritmo del año
-    pct_v = (R["INGRESO"] / P["INGRESO"] * 100) if P["INGRESO"] else 0
-    pct_anual = (R["INGRESO"] / PA["INGRESO"] * 100) if PA["INGRESO"] else 0
-    out.append(
-        f"Ventas YTD {m(R['INGRESO'])}: {pct_v:.0f}% del presupuesto de los meses "
-        f"transcurridos y {pct_anual:.0f}% del presupuesto anual, con {mes_corte}/12 "
-        f"meses ({mes_corte/12*100:.0f}% del año). El negocio es estacional: la "
-        f"comparación válida es la de los meses cerrados."
-    )
+    if df_det.empty:
+        return out
+    desf = df_det[(df_det["Desvío"] <= -umbral) & (~df_det["_clasif"].isin(INGRESOS))]
+    if not desf.empty:
+        partes = []
+        for tipo, txt in [("Recurrente", "recurrente"),
+                          ("Puntual", "puntual"), ("No presupuestado", "sin presupuesto")]:
+            sub = desf[desf["Tipo de brecha"] == tipo]
+            if not sub.empty:
+                extra = ""
+                if tipo == "Recurrente":
+                    anual = sub["Si se mantiene 12m"].fillna(0).sum()
+                    extra = f", {fmt_m(anual)} en el año si se mantiene"
+                partes.append(f"{fmt_m(sub['Desvío'].sum())} {txt} "
+                              f"({_plural(len(sub), 'cuenta', 'cuentas')}{extra})")
+        if partes:
+            out.append("Sobregasto sobre la materialidad: " + "; ".join(partes) + ".")
 
-    # Proyección
-    ebit_proy = DR["EBIT"] + DPR["EBIT"]
-    if DPA["EBIT"]:
+    fav = df_det[(df_det["Desvío"] >= umbral) & (~df_det["_clasif"].isin(INGRESOS))
+                 & (df_det["_clasif"] != "COSTO_VAR")]
+    if not fav.empty:
         out.append(
-            f"Si los meses restantes se ejecutan según presupuesto, el EBIT cierra en "
-            f"{m(ebit_proy)} contra {m(DPA['EBIT'])} presupuestados "
-            f"({m(ebit_proy - DPA['EBIT'])} de desviación al cierre)."
-        )
+            f"Gasto bajo presupuesto: {fmt_m(fav['Desvío'].sum())} en "
+            f"{_plural(len(fav), 'cuenta', 'cuentas')}. Antes de leerlo como ahorro, confirmar "
+            f"con contabilidad que no sean facturas pendientes de registrar.")
+
+    desfase = df_det[df_det["Tipo de brecha"] == "Desfase de calendario"]
+    if not desfase.empty:
+        out.append(
+            f"{_plural(len(desfase), 'cuenta muestra', 'cuentas muestran')} desfase de "
+            f"calendario: el acumulado cuadra pero el gasto cayó en otros meses. No es ahorro "
+            f"ni sobregasto; conviene corregir la mensualización del presupuesto.")
     return out
 
 
 # ── EXPORT EXCEL ──────────────────────────────────────────────
 
 _FMT_M = '#,##0.0,, "M"'
-_FMT_PCT = "0.0%"
+_FMT_MS = '+#,##0.0,, "M";-#,##0.0,, "M";0.0,, "M"'   # desvío con signo
+_FMT_PCT = "0%"
 _FMT_PP = '+0.0" pp";-0.0" pp"'
-_FMT_INT = "#,##0"
+_FMT_FECHA = "dd-mm-yyyy"
 
 
 class _Hoja:
     """Escritor de hojas con el estilo corporativo (encabezados morados,
-    subtotales resaltados, cifras en millones)."""
+    subtotales resaltados, cifras en millones, impresión horizontal a 1 página de ancho)."""
 
     def __init__(self, wb, nombre: str, ancho_col_a: int = 34):
         from openpyxl.utils import get_column_letter
+        from openpyxl.worksheet.properties import PageSetupProperties
         self.ws = wb.create_sheet(title=nombre[:31])
         self.r = 1
         self.ancho_col_a = ancho_col_a
         self._gcl = get_column_letter
-        self.max_col = 1
         self.fila_cabecera = None   # fila de encabezados de la primera tabla
+        ws = self.ws
+        ws.sheet_view.showGridLines = False
+        ws.page_setup.orientation = "landscape"
+        ws.page_setup.paperSize = ws.PAPERSIZE_LETTER
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.sheet_properties.pageSetUpPr = PageSetupProperties(fitToPage=True)
+        ws.page_margins.left = ws.page_margins.right = 0.4
+        ws.page_margins.top = ws.page_margins.bottom = 0.5
+        ws.oddFooter.center.text = "&P / &N"
 
     def titulo(self, texto: str, sub: str = ""):
         from openpyxl.styles import Font
         c = self.ws.cell(row=self.r, column=1, value=texto)
-        c.font = Font(bold=True, size=14, color=C_MORADO)
+        c.font = Font(bold=True, size=15, color=C_MORADO)
         self.r += 1
         if sub:
             c = self.ws.cell(row=self.r, column=1, value=sub)
@@ -952,266 +1000,303 @@ class _Hoja:
         c.font = Font(bold=True, size=12, color=C_MORADO)
         self.r += 1
 
-    def texto(self, lineas: list, vinetas: bool = True, color: str = "333333"):
+    def texto(self, lineas: list, vinetas: bool = True, color: str = "333333",
+              negrita_primera: bool = False, ancho_merge: int = 0):
         from openpyxl.styles import Font, Alignment
-        for t in lineas:
+        for i, t in enumerate(lineas):
             c = self.ws.cell(row=self.r, column=1, value=(f"•  {t}" if vinetas else t))
-            c.font = Font(size=10, color=color)
+            c.font = Font(size=11 if (negrita_primera and i == 0) else 10,
+                          bold=(negrita_primera and i == 0), color=color)
             c.alignment = Alignment(wrap_text=True, vertical="top")
-            self.ws.row_dimensions[self.r].height = max(15, 13 * (1 + len(str(t)) // 110))
+            if ancho_merge > 1:
+                self.ws.merge_cells(start_row=self.r, start_column=1,
+                                    end_row=self.r, end_column=ancho_merge)
+            chars = 150 if ancho_merge > 1 else 110
+            self.ws.row_dimensions[self.r].height = max(16, 14 * (1 + len(str(t)) // chars))
             self.r += 1
         self.r += 1
 
     def tabla(self, df: pd.DataFrame, formatos: dict | None = None,
               subtotales: list | None = None, resaltar_signo: list | None = None,
-              anchos: dict | None = None):
-        """Escribe un DataFrame con encabezado morado. `formatos` mapea columna →
-        número de formato; `resaltar_signo` colorea verde/rojo según el signo."""
+              anchos: dict | None = None, autofiltro: bool = False,
+              envolver: list | None = None):
+        """Escribe un DataFrame con encabezado morado. Retorna (fila_encabezado, fila_final)."""
         from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
         if df is None or df.empty:
             self.texto(["Sin datos para este bloque con los filtros aplicados."])
-            return
+            return None, None
 
         cols = [c for c in df.columns if not str(c).startswith("_")]
         formatos = formatos or {}
         resaltar_signo = resaltar_signo or []
+        envolver = envolver or []
         borde = Border(bottom=Side(style="thin", color="E6DCEF"))
         fill_h = PatternFill("solid", fgColor=C_MORADO2)
         fill_sub = PatternFill("solid", fgColor=C_LILA_BG)
 
         if self.fila_cabecera is None:
             self.fila_cabecera = self.r
+        fila_h = self.r
         for j, col in enumerate(cols, start=1):
             c = self.ws.cell(row=self.r, column=j, value=str(col))
             c.font = Font(bold=True, color="FFFFFF", size=10)
             c.fill = fill_h
             c.alignment = Alignment(horizontal="left" if j == 1 else "right",
                                     wrap_text=True, vertical="center")
-        self.ws.row_dimensions[self.r].height = 28
+        self.ws.row_dimensions[self.r].height = 30
         self.r += 1
 
         for i, (_, fila) in enumerate(df.iterrows()):
             es_sub = bool(subtotales and i in subtotales)
             for j, col in enumerate(cols, start=1):
                 v = fila[col]
-                if pd.isna(v):
+                if isinstance(v, (list, tuple, dict)):
+                    v = str(v)
+                elif v is None or (not isinstance(v, str) and pd.isna(v)):
                     v = None
                 elif hasattr(v, "item"):
                     v = v.item()
                 c = self.ws.cell(row=self.r, column=j, value=v)
                 c.border = borde
-                c.font = Font(size=10, bold=es_sub,
-                              color=C_MORADO if es_sub else "222222")
+                c.font = Font(size=10, bold=es_sub, color=C_MORADO if es_sub else "222222")
+                if col in envolver:
+                    c.alignment = Alignment(wrap_text=True, vertical="top")
                 if es_sub:
                     c.fill = fill_sub
                 if col in formatos:
                     c.number_format = formatos[col]
-                if col in resaltar_signo and isinstance(v, (int, float)):
-                    c.font = Font(size=10, bold=es_sub,
-                                  color=(C_VERDE if v >= 0 else C_ROJO))
+                if col in resaltar_signo and isinstance(v, (int, float)) and abs(v) >= 0.5:
+                    c.font = Font(size=10, bold=True, color=(C_VERDE if v >= 0 else C_ROJO))
             self.r += 1
+        fila_fin = self.r - 1
         self.r += 1
-        self.max_col = max(self.max_col, len(cols))
 
-        self.ws.column_dimensions["A"].width = self.ancho_col_a
+        if autofiltro:
+            self.ws.auto_filter.ref = f"A{fila_h}:{self._gcl(len(cols))}{fila_fin}"
+            self.ws.print_title_rows = f"{fila_h}:{fila_h}"
+
+        self.ws.column_dimensions["A"].width = max(
+            self.ws.column_dimensions["A"].width or 0, self.ancho_col_a)
         for j in range(2, len(cols) + 1):
             letra = self._gcl(j)
-            ancho = (anchos or {}).get(cols[j - 1], 15)
+            ancho = (anchos or {}).get(cols[j - 1], 14)
             actual = self.ws.column_dimensions[letra].width or 0
             self.ws.column_dimensions[letra].width = max(actual, ancho)
+        return fila_h, fila_fin
 
     def congelar(self, columna: str = "A"):
-        """Deja fijos los encabezados de la primera tabla y las columnas a su
-        izquierda, para que al desplazarse no se pierda de vista qué se está mirando."""
         fila = (self.fila_cabecera + 1) if self.fila_cabecera else 1
         self.ws.freeze_panes = f"{columna}{fila}"
+
+
+def _grafico_barras(ws, titulo: str, col_cat: int, cols_val: list, fila_h: int,
+                    fila_fin: int, ancla: str, colores: list):
+    """Barras agrupadas (real vs presupuesto) con un solo eje."""
+    from openpyxl.chart import BarChart, Reference
+    ch = BarChart()
+    ch.type = "col"
+    ch.grouping = "clustered"
+    ch.title = titulo
+    ch.height, ch.width = 7.2, 15.5
+    ch.y_axis.numFmt = '#,##0,, "M"'
+    ch.y_axis.majorGridlines = None
+    ch.legend.position = "b"
+    for col in cols_val:
+        ch.add_data(Reference(ws, min_col=col, min_row=fila_h, max_row=fila_fin),
+                    titles_from_data=True)
+    ch.set_categories(Reference(ws, min_col=col_cat, min_row=fila_h + 1, max_row=fila_fin))
+    for s, color in zip(ch.series, colores):
+        s.graphicalProperties.solidFill = color
+        s.graphicalProperties.line.noFill = True
+    ch.gapWidth = 60
+    ws.add_chart(ch, ancla)
 
 
 def to_excel(rep: dict) -> bytes:
     """Genera el workbook completo del reporte de gerencia."""
     from openpyxl import Workbook
 
-    meta = rep["meta"]
-    kpi = rep["kpi"]
+    meta, kpi = rep["meta"], rep["kpi"]
     wb = Workbook()
     wb.remove(wb.active)
+    sub = f"Kreems · {meta['sociedad']} · {meta['periodo_lbl']} · generado {meta['generado']}"
 
-    cab = f"Kreems · Control Presupuestario {meta['ano']}"
-    sub = f"{meta['sociedad']} · {meta['periodo_lbl']} · generado {meta['generado']}"
+    fmt_basic = {"Real YTD": _FMT_M, "Ppto YTD": _FMT_M, "Desvío": _FMT_MS,
+                 "% Ejec.": _FMT_PCT, "Ppto Año": _FMT_M, "% Ppto Año consumido": _FMT_PCT,
+                 "% s/Ventas": _FMT_PCT, "Cierre según ppto": _FMT_M,
+                 "Cierre según tendencia": _FMT_M, "Si se mantiene 12m": _FMT_MS,
+                 "Real": _FMT_M, "Presupuesto": _FMT_M}
 
-    # ── Portada ───────────────────────────────────────────────
-    h = _Hoja(wb, "Portada", ancho_col_a=118)
-    h.titulo("Reporte de Gerencia — Real vs Presupuesto", cab)
-    h.seccion("Alcance")
-    h.texto([f"Sociedad: {meta['sociedad']}",
-             f"Periodo acumulado: {meta['periodo_lbl']} ({meta['n_meses']} de 12 meses)",
-             f"Facturación del periodo: {meta['mix_sociedad']}",
-             "El presupuesto es uno solo para el negocio. La columna «Sociedad» de las hojas "
-             "3, 4 y 5 indica dónde se registra cada línea: nombra la sociedad que concentra "
-             "el mayor monto y con qué porcentaje (ej. «ACUÑA 81%» = el 19% restante está en "
-             "Gran Natural). Sin porcentaje = el 100% está en esa sociedad.",
-             f"Generado: {meta['generado']}"])
-    if rep["alertas"]:
-        h.seccion("Advertencias sobre la base de comparación")
-        h.texto(rep["alertas"])
-    h.seccion("Conclusiones")
-    h.texto(rep["conclusiones"])
-    h.seccion("Cómo leer las columnas")
-    h.texto(rep["escalas"])
-    h.seccion("Bases y criterios")
-    h.texto(rep["bases"])
-    h.seccion("Contenido")
-    h.texto([
-        "1 Resumen Ejecutivo — P&L acumulado contra el presupuesto de los mismos meses.",
-        "2 Puente EBIT — de dónde sale la diferencia entre el EBIT presupuestado y el real.",
-        "3 Centros de Costo — ejecución, consumo del presupuesto anual y proyección por CC.",
-        "4 Detalle Cuentas — cada cuenta con su tipo de brecha (recurrente / puntual / desfase).",
-        "5 Plan de Acción — las desviaciones que explican el 80% de la brecha, para completar en la reunión.",
-        "6 Mes a Mes — perfil mensual por centro de costo, por línea del P&L y por cuenta "
-        "con brecha material (en qué mes exactamente se produjo cada desviación).",
-        "7 Proyección Cierre — cómo termina el año si los meses restantes se ejecutan según presupuesto.",
-    ])
+    # ── 0. Resumen para gerencia ──────────────────────────────
+    h = _Hoja(wb, "Resumen Gerencia", ancho_col_a=34)
+    h.titulo("¿Cómo vamos con el presupuesto?", sub)
+    h.texto(rep["titular"], vinetas=False, negrita_primera=True, color="222222", ancho_merge=7)
 
-    # ── 1. Resumen ejecutivo ──────────────────────────────────
-    h = _Hoja(wb, "1 Resumen Ejecutivo", ancho_col_a=26)
-    h.titulo("Resumen Ejecutivo", sub)
+    filas_kpi = [
+        ("Ventas", kpi["ventas_r"], kpi["ventas_p"], kpi["ventas_r"] - kpi["ventas_p"],
+         _pct(kpi["ventas_r"], kpi["ventas_p"])),
+        ("Utilidad bruta", kpi["ub_r"], kpi["ub_p"], kpi["ub_r"] - kpi["ub_p"],
+         _pct(kpi["ub_r"], kpi["ub_p"])),
+        ("Gasto controlable (costo fijo + OPEX)", kpi["ctrl_r"], kpi["ctrl_p"],
+         kpi["ctrl_p"] - kpi["ctrl_r"], _pct(kpi["ctrl_r"], kpi["ctrl_p"])),
+        ("EBIT", kpi["ebit_r"], kpi["ebit_p"], kpi["ebit_r"] - kpi["ebit_p"],
+         _pct(kpi["ebit_r"], kpi["ebit_p"])),
+    ]
+    h.seccion(f"Indicadores — acumulado {meta['periodo_lbl']}")
+    h.tabla(pd.DataFrame(filas_kpi, columns=["Indicador", "Real", "Presupuesto", "Desvío",
+                                             "% Ejec."]),
+            formatos=fmt_basic, resaltar_signo=["Desvío"])
+
+    cols_t = ["Cuenta", "Centro de costo", "Real YTD", "Ppto YTD", "Desvío",
+              "Tipo de brecha", "Comentario"]
+    h.seccion("Lo que más resta al resultado")
+    h.tabla(rep["top_desfav"][cols_t] if not rep["top_desfav"].empty else rep["top_desfav"],
+            formatos=fmt_basic, resaltar_signo=["Desvío"],
+            anchos={"Centro de costo": 18, "Tipo de brecha": 18, "Comentario": 50},
+            envolver=["Comentario"])
+    h.seccion("Lo que más suma al resultado")
+    h.tabla(rep["top_fav"][cols_t] if not rep["top_fav"].empty else rep["top_fav"],
+            formatos=fmt_basic, resaltar_signo=["Desvío"], envolver=["Comentario"])
+
+    h.seccion("Cierre del año")
+    esc = pd.DataFrame([
+        ("Según presupuesto de los meses que faltan", kpi["ventas_cierre_ppto"],
+         kpi["ebit_cierre_ppto"]),
+        (f"Según ritmo de {meta['rec_lbl']}", kpi["ventas_cierre_tend"], kpi["ebit_cierre_tend"]),
+        ("Presupuesto anual", kpi["ventas_ppto_ano"], kpi["ebit_ppto_ano"]),
+    ], columns=["Escenario", "Ventas", "EBIT"])
+    h.tabla(esc, formatos={"Ventas": _FMT_M, "EBIT": _FMT_M})
+
+    h.seccion("Mes a mes — real vs presupuesto")
+    serie = rep["serie"][["Mes", "Ventas real", "Ventas ppto", "EBIT real", "EBIT ppto"]]
+    fh, ff = h.tabla(serie, formatos={c: _FMT_M for c in serie.columns if c != "Mes"},
+                     anchos={c: 13 for c in serie.columns})
+    if fh:
+        _grafico_barras(h.ws, "Ventas por mes", 1, [2, 3], fh, ff, f"I{fh - 1}",
+                        [C_FUCSIA, C_MORADO2])
+        _grafico_barras(h.ws, "EBIT por mes", 1, [4, 5], fh, ff, f"I{fh + 15}",
+                        [C_FUCSIA, C_MORADO2])
+    for col in "BCDEFG":
+        h.ws.column_dimensions[col].width = max(h.ws.column_dimensions[col].width or 0, 15)
+
+    # ── 1. Estado de resultados ───────────────────────────────
+    h = _Hoja(wb, "1 Estado de Resultados", ancho_col_a=26)
+    h.titulo("Estado de Resultados acumulado", sub)
     df_pl = rep["pl"]
-    subs = [i for i, v in enumerate(df_pl["_subtotal"]) if v]
-    h.seccion(f"Estado de Resultados acumulado — {meta['periodo_lbl']}")
-    h.tabla(df_pl,
-            formatos={"Real YTD": _FMT_M, "Ppto YTD": _FMT_M, "Varianza": _FMT_M,
-                      "Impacto resultado": _FMT_M, "% Ejec.": _FMT_PCT,
-                      "% s/Ventas": _FMT_PCT, "Ppto Año": _FMT_M,
-                      "% Ppto Año consumido": _FMT_PCT},
-            subtotales=subs, resaltar_signo=["Impacto resultado"],
-            anchos={"% Ppto Año consumido": 19, "Impacto resultado": 17})
+    h.tabla(df_pl, formatos=fmt_basic,
+            subtotales=[i for i, v in enumerate(df_pl["_subtotal"]) if v],
+            resaltar_signo=["Desvío"], anchos={"% Ppto Año consumido": 19})
     h.seccion("Márgenes")
-    h.tabla(rep["margenes"],
-            formatos={"Real": _FMT_PCT, "Ppto": _FMT_PCT, "Δ pp": _FMT_PP},
+    h.tabla(rep["margenes"], formatos={"Real": "0.0%", "Ppto": "0.0%", "Δ pp": _FMT_PP},
             resaltar_signo=["Δ pp"])
-    h.seccion("Lectura")
-    h.texto(rep["conclusiones"])
+    if rep["conclusiones"]:
+        h.seccion("Lectura")
+        h.texto(rep["conclusiones"], ancho_merge=8)
     h.congelar("B")
 
     # ── 2. Puente EBIT ────────────────────────────────────────
-    h = _Hoja(wb, "2 Puente EBIT", ancho_col_a=42)
-    h.titulo("Puente de EBIT — Presupuesto → Real", sub)
-    h.texto([
-        "El efecto de ventas está valorizado al margen de contribución presupuestado, "
-        "y el costo variable se compara contra el que correspondería a las ventas reales. "
-        "Así una caída de ventas no aparece como «ahorro» de costo variable.",
-        "Signo positivo = suma al EBIT. Signo negativo = lo resta.",
-    ])
-    h.tabla(rep["puente"], formatos={"Efecto": _FMT_M},
-            resaltar_signo=["Efecto"], anchos={"Efecto": 16, "Tipo": 12})
-    if abs(rep["descuadre"]) > 1:
-        h.texto([f"Descuadre detectado: ${rep['descuadre']:,.0f}"])
+    h = _Hoja(wb, "2 Puente EBIT", ancho_col_a=40)
+    h.titulo("Puente de EBIT — del presupuesto al real", sub)
+    h.texto(["El efecto de ventas está valorizado al margen de contribución presupuestado y "
+             "el costo variable se compara contra el que correspondería a las ventas reales.",
+             "Positivo = suma al EBIT. Negativo = lo resta."])
+    h.tabla(rep["puente"][["Concepto", "Efecto"]],
+            formatos={"Efecto": _FMT_MS}, resaltar_signo=["Efecto"], anchos={"Efecto": 16})
 
     # ── 3. Centros de costo ───────────────────────────────────
     h = _Hoja(wb, "3 Centros de Costo", ancho_col_a=22)
-    h.titulo("Gasto por Centro de Costo — Real vs Presupuesto", sub)
-    fmt_cc = {"Real YTD": _FMT_M, "Ppto YTD": _FMT_M, "Varianza": _FMT_M,
-              "Impacto resultado": _FMT_M, "% Ejec.": _FMT_PCT, "Ppto Año": _FMT_M,
-              "% Ppto Año consumido": _FMT_PCT, "Proyección cierre": _FMT_M,
-              "Run-rate x12": _FMT_M, "Desv. proyectada": _FMT_M}
-    h.tabla(rep["cc"], formatos=fmt_cc, resaltar_signo=["Impacto resultado"],
-            anchos={"% Ppto Año consumido": 19, "Proyección cierre": 17,
-                    "Impacto resultado": 17, "Desv. proyectada": 16,
-                    "Sociedad": 17})
-    h.seccion("Apertura por línea del P&L")
-    h.tabla(rep["cc_linea"],
-            formatos={"Real YTD": _FMT_M, "Ppto YTD": _FMT_M, "Varianza": _FMT_M,
-                      "Impacto resultado": _FMT_M, "% Ejec.": _FMT_PCT},
-            resaltar_signo=["Impacto resultado"],
-            anchos={"Línea": 22, "Impacto resultado": 17})
+    h.titulo("Gasto controlable por centro de costo (costo fijo + OPEX)", sub)
+    h.tabla(rep["cc"], formatos=fmt_basic, resaltar_signo=["Desvío"],
+            anchos={"Sociedad": 17, "% Ppto Año consumido": 19, "Cierre según ppto": 17,
+                    "Cierre según tendencia": 19})
+    h.seccion("Apertura por línea")
+    h.tabla(rep["cc_linea"], formatos=fmt_basic, resaltar_signo=["Desvío"])
     h.congelar("C")
 
     # ── 4. Detalle cuentas ────────────────────────────────────
     h = _Hoja(wb, "4 Detalle Cuentas", ancho_col_a=20)
-    h.titulo("Detalle por Cuenta y Centro de Costo", sub)
-    h.texto([
-        "Ordenado por impacto sobre el resultado. «Tipo de brecha» clasifica el "
-        "comportamiento mensual: Recurrente = se repite mes a mes (se anualiza); "
-        "Puntual = concentrado en un mes; Desfase de calendario = el acumulado cuadra "
-        "pero el gasto cayó en meses distintos; No presupuestado = hay gasto sin presupuesto.",
-        "«Meses con desvío desfavorable» indica en qué meses la cuenta se salió del "
-        "presupuesto en contra del resultado, y por cuánto: en gastos = se gastó más que lo "
-        "presupuestado del mes (signo +); en cuentas de ingreso = se vendió menos (signo −). "
-        "Las columnas «Var <mes>» abren la varianza de cada mes (real − presupuesto).",
-    ])
-    _fmt_det = {"Real YTD": _FMT_M, "Ppto YTD": _FMT_M, "Varianza": _FMT_M,
-                "Impacto resultado": _FMT_M, "% Ejec.": _FMT_PCT,
-                "Impacto anualizado": _FMT_M, "Ppto Año": _FMT_M,
-                "Proyección cierre": _FMT_M, "Meses desviados": _FMT_INT}
-    _fmt_det.update({c: _FMT_M for c in rep["cols_var_mes"]})
-    _anchos_det = {"Cuenta": 40, "Sociedad": 17, "Línea P&L": 15, "Categoría EERR": 19,
-                   "Tipo de brecha": 20, "Impacto anualizado": 18,
-                   "Impacto resultado": 17, "Proyección cierre": 17,
-                   "Meses desviados": 15, "Meses con desvío desfavorable": 42}
-    _anchos_det.update({c: 12 for c in rep["cols_var_mes"]})
-    h.tabla(rep["detalle"], formatos=_fmt_det,
-            resaltar_signo=["Impacto resultado"], anchos=_anchos_det)
+    h.titulo("Detalle por cuenta y centro de costo", sub)
+    h.texto(["Usa los filtros del encabezado para buscar por centro de costo, cuenta, línea o "
+             "tipo de brecha. Ordenado por tamaño del desvío.",
+             "Tipo de brecha: Recurrente = se repite mes a mes · Puntual = concentrado en un mes · "
+             "Desfase de calendario = el acumulado cuadra pero el gasto cayó en otros meses · "
+             "No presupuestado = gasto sin presupuesto · No ejecutado = presupuesto sin gasto."])
+    fmt_det = {**fmt_basic, **{c: _FMT_MS for c in rep["cols_mes"]}}
+    anchos_det = {"Cuenta": 40, "Sociedad": 17, "Línea P&L": 15, "Categoría EERR": 19,
+                  "Tipo de brecha": 20, "Meses desfavorables": 40, "Si se mantiene 12m": 16,
+                  "Cierre según ppto": 16, "Comentario": 40, **{c: 12 for c in rep["cols_mes"]}}
+    h.tabla(rep["detalle"], formatos=fmt_det, resaltar_signo=["Desvío"],
+            anchos=anchos_det, autofiltro=True)
     h.congelar("D")
 
     # ── 5. Plan de acción ─────────────────────────────────────
     h = _Hoja(wb, "5 Plan de Accion", ancho_col_a=20)
-    h.titulo("Plan de Acción — desviaciones que explican la brecha", sub)
-    h.texto([
-        f"Brecha desfavorable acumulada: ${rep['total_desfavorable']/1e6:,.1f}M. "
-        f"Las líneas siguientes concentran el 80% de esa brecha (criterio de Pareto).",
-        "Las últimas cuatro columnas van en blanco a propósito: se completan en la "
-        "reunión de gerencia con la explicación y el compromiso de cada responsable.",
-    ])
-    _fmt_ac = {"Real YTD": _FMT_M, "Ppto YTD": _FMT_M, "Varianza": _FMT_M,
-               "Impacto resultado": _FMT_M, "% acum. brecha": _FMT_PCT,
-               "Impacto anualizado": _FMT_M, "Meses desviados": _FMT_INT}
-    _fmt_ac.update({c: _FMT_M for c in rep["cols_var_mes"]})
-    _anchos_ac = {"Cuenta": 40, "Sociedad": 17, "Tipo de brecha": 20,
-                  "Impacto anualizado": 18,
-                  "Impacto resultado": 17, "Meses con desvío desfavorable": 42,
-                  "Explicación (qué pasó)": 46, "Acción comprometida": 40,
-                  "Responsable": 18, "Fecha": 12}
-    _anchos_ac.update({c: 12 for c in rep["cols_var_mes"]})
-    h.tabla(rep["accion"], formatos=_fmt_ac,
-            resaltar_signo=["Impacto resultado"], anchos=_anchos_ac)
+    h.titulo("Plan de acción — desviaciones desfavorables", sub)
+    h.texto([f"Desvío desfavorable sobre la materialidad: {fmt_m(-rep['total_desfavorable'])}. "
+             f"Las líneas siguientes explican al menos el 80%.",
+             "Los comentarios se registran en la app (Reporte de Gerencia → Plan de acción) y "
+             "se mantienen de un mes a otro hasta que se editen."])
+    fmt_ac = {**fmt_basic, "Fecha compromiso": _FMT_FECHA,
+              **{c: _FMT_MS for c in rep["cols_mes"]}}
+    h.tabla(rep["accion"], formatos=fmt_ac, resaltar_signo=["Desvío"],
+            anchos={"Cuenta": 40, "Sociedad": 17, "Tipo de brecha": 18,
+                    "Meses desfavorables": 40, "Explicación": 45, "Acción comprometida": 40,
+                    "Responsable": 18, "Fecha compromiso": 14,
+                    **{c: 12 for c in rep["cols_mes"]}},
+            autofiltro=True, envolver=["Explicación", "Acción comprometida"])
     h.congelar("C")
 
     # ── 6. Mes a mes ──────────────────────────────────────────
     h = _Hoja(wb, "6 Mes a Mes", ancho_col_a=22)
-    h.titulo("Perfil mensual", sub)
+    h.titulo("Mes a mes", sub)
     fmt_meses = {m: _FMT_M for m in meta["meses"]}
     fmt_meses["Total YTD"] = _FMT_M
-    h.seccion("Gasto por centro de costo")
-    h.tabla(rep["mes_cc"], formatos=fmt_meses, anchos={"Concepto": 12})
     h.seccion("Líneas del P&L")
     h.tabla(rep["mes_pl"], formatos=fmt_meses, anchos={"Concepto": 12})
-    h.seccion("Cuentas con brecha material — Real / Ppto / Varianza por mes")
-    h.texto([
-        "Respaldo mes a mes de cada cuenta comentada: muestra exactamente en qué mes "
-        "se produjo la desviación y contra qué presupuesto mensual.",
-    ])
-    h.tabla(rep["mes_cuenta"], formatos=fmt_meses,
-            anchos={"Cuenta": 40, "Concepto": 12})
+    h.seccion("Gasto controlable por centro de costo (Desvío = presupuesto − real)")
+    h.tabla(rep["mes_cc"], formatos=fmt_meses, anchos={"Concepto": 12})
+    h.seccion("Cuentas con desvío material")
+    h.tabla(rep["mes_cuenta"], formatos=fmt_meses, anchos={"Cuenta": 40, "Concepto": 12})
     h.ws.freeze_panes = "D1"
 
     # ── 7. Proyección ─────────────────────────────────────────
     h = _Hoja(wb, "7 Proyeccion Cierre", ancho_col_a=26)
-    h.titulo("Proyección al cierre del año", sub)
-    h.texto([
-        "«Proyección» = real acumulado + presupuesto de los meses que faltan "
-        "(supone que el resto del año se ejecuta según plan).",
-        "«Run-rate x12» extrapola el ritmo real actual. En un negocio estacional "
-        "el run-rate es referencial: sirve para gastos fijos, no para ventas.",
-    ])
+    h.titulo("Cierre del año en dos escenarios", sub)
+    h.texto(["Según presupuesto: real acumulado + presupuesto de los meses que faltan.",
+             f"Según tendencia: el presupuesto de los meses que faltan se ajusta por el ritmo "
+             f"real/presupuesto de cada línea en {meta['rec_lbl']}.",
+             "Desvío con signo del efecto sobre el resultado (positivo = favorable)."])
     df_pr = rep["proyeccion"]
-    subs_pr = [i for i, v in enumerate(df_pr["_subtotal"]) if v]
-    h.tabla(df_pr,
-            formatos={"Real YTD": _FMT_M, "Ppto restante": _FMT_M,
-                      "Proyección (real + ppto restante)": _FMT_M,
-                      "Run-rate x12": _FMT_M, "Ppto Año": _FMT_M,
-                      "Desv. vs Ppto Año": _FMT_M},
-            subtotales=subs_pr, resaltar_signo=["Desv. vs Ppto Año"],
-            anchos={"Proyección (real + ppto restante)": 24, "Desv. vs Ppto Año": 18})
+    col_ritmo = [c for c in df_pr.columns if c.startswith("Ritmo")]
+    h.tabla(df_pr, formatos={**fmt_basic, "Ppto restante": _FMT_M,
+                             "Desvío (según ppto)": _FMT_MS, "Desvío (según tendencia)": _FMT_MS,
+                             **{c: _FMT_PCT for c in col_ritmo}},
+            subtotales=[i for i, v in enumerate(df_pr["_subtotal"]) if v],
+            resaltar_signo=["Desvío (según ppto)", "Desvío (según tendencia)"],
+            anchos={"Cierre según tendencia": 19, "Desvío (según ppto)": 18,
+                    "Desvío (según tendencia)": 21})
+
+    # ── 8. Bases ──────────────────────────────────────────────
+    h = _Hoja(wb, "8 Bases", ancho_col_a=130)
+    h.titulo("Base de comparación y criterios", sub)
+    if rep["alertas"]:
+        h.seccion("Base de comparación")
+        h.texto(rep["alertas"])
+    h.seccion("Cómo leer las cifras")
+    h.texto(rep["escalas"])
+    h.seccion("Criterios")
+    h.texto(rep["bases"])
+    h.seccion("Contenido")
+    h.texto([
+        "Resumen Gerencia — titular, indicadores, principales desviaciones, cierre y mes a mes.",
+        "1 Estado de Resultados — P&L acumulado contra el presupuesto de los mismos meses.",
+        "2 Puente EBIT — de dónde sale la diferencia entre el EBIT presupuestado y el real.",
+        "3 Centros de Costo — gasto controlable por centro de costo y cierre proyectado.",
+        "4 Detalle Cuentas — cada cuenta × centro de costo con filtros y tipo de brecha.",
+        "5 Plan de Acción — desvíos desfavorables con explicación, acción y responsable.",
+        "6 Mes a Mes — perfil mensual del P&L, de cada centro de costo y de cada cuenta material.",
+        "7 Proyección Cierre — el año completo según presupuesto y según tendencia.",
+    ])
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -1220,209 +1305,233 @@ def to_excel(rep: dict) -> bytes:
 
 # ── EXPORT HTML ───────────────────────────────────────────────
 
-def _m(v) -> str:
-    if v is None or (isinstance(v, float) and pd.isna(v)):
-        return "—"
-    return f"${v/1e6:,.1f}M"
-
-
-def _p(v) -> str:
-    if v is None or pd.isna(v):
-        return "—"
-    pct = v * 100
-    # Con un decimal bajo el 1% para no mostrar "-0%" en líneas casi nulas
-    return f"{pct:,.1f}%" if abs(pct) < 1 else f"{pct:,.0f}%"
-
-
 def _e(t) -> str:
     return _html.escape(str(t))
 
 
+_RE_MONTO = re.compile(r"[−+]?\$[\d.,]+M")
+
+
+def _et(t) -> str:
+    """Escapa texto y evita que un monto quede partido en dos líneas."""
+    return _RE_MONTO.sub(lambda m: f'<span class="nw">{m.group(0)}</span>', _e(t))
+
+
+def _clase_signo(v: float) -> str:
+    if _es_nulo(v) or abs(float(v)) < 0.5e5:
+        return ""
+    return "pos" if float(v) > 0 else "neg"
+
+
+def _grafico_meses(serie: pd.DataFrame, col_r: str, col_p: str, titulo: str,
+                   mes_corte: int) -> str:
+    """
+    Columnas mensuales: barra = real, marca horizontal = presupuesto. Responsivo
+    (HTML/CSS, no SVG escalado) para que las etiquetas se lean en celular.
+    """
+    vals = [v for v in list(serie[col_r]) + list(serie[col_p]) if not _es_nulo(v)] + [0.0]
+    vmax, vmin = max(vals), min(vals)
+    rango = (vmax - vmin) or 1.0
+
+    def pos(v):  # % desde abajo
+        return (float(v) - vmin) / rango * 100
+
+    z = pos(0.0)
+    cols = []
+    for _, r in serie.iterrows():
+        m, real, ppto = int(r["mes"]), r[col_r], r[col_p]
+        futuro = m > mes_corte
+        partes = []
+        if not futuro and not _es_nulo(real):
+            alto = abs(pos(real) - z)
+            base = min(pos(real), z)
+            clase = "bar" if real >= 0 else "bar negb"
+            partes.append(f'<div class="{clase}" style="bottom:{base:.2f}%;height:{max(alto, .6):.2f}%"></div>')
+        partes.append(f'<div class="tk" style="bottom:{pos(ppto):.2f}%"></div>')
+        if m == mes_corte and not _es_nulo(real):
+            arriba = max(pos(real), z, pos(ppto))
+            partes.append(f'<div class="dl" style="bottom:calc({arriba:.2f}% + 4px)">{fmt_m(real)}</div>')
+        if futuro:
+            tip = f"{r['Mes']} · presupuesto {fmt_m(ppto)}"
+        else:
+            tip = (f"{r['Mes']} · real {fmt_m(real)} · ppto {fmt_m(ppto)} · "
+                   f"{fmt_m(float(real) - float(ppto), signo=True)}")
+        cols.append(
+            f'<div class="mc{" fut" if futuro else ""}" tabindex="0">'
+            f'<div class="ar">{"".join(partes)}</div>'
+            f'<div class="xl">{_e(r["Mes"])}</div>'
+            f'<div class="tip">{_e(tip)}</div></div>')
+    ejes = (f'<div class="yl" style="bottom:{pos(vmax):.2f}%">{fmt_m(vmax)}</div>'
+            f'<div class="gl" style="bottom:{pos(vmax):.2f}%"></div>'
+            f'<div class="zl" style="bottom:{z:.2f}%"></div>'
+            f'<div class="yl" style="bottom:{z:.2f}%">0</div>')
+    if vmin < 0:
+        ejes += (f'<div class="yl" style="bottom:{pos(vmin):.2f}%">{fmt_m(vmin)}</div>'
+                 f'<div class="gl" style="bottom:{pos(vmin):.2f}%"></div>')
+    return (f'<figure class="chart"><figcaption>{_e(titulo)}</figcaption>'
+            f'<div class="plot"><div class="axis">{ejes}</div>'
+            f'<div class="cols">{"".join(cols)}</div></div></figure>')
+
+
 def to_html(rep: dict) -> str:
-    """Página autocontenida con los insights del reporte (sin dependencias externas)."""
+    """Página autocontenida: resumen para gerencia arriba, análisis detallado abajo."""
     meta, kpi = rep["meta"], rep["kpi"]
 
-    def kpi_card(label, real, ppto, invertir=False):
-        var = real - ppto
-        favorable = (var <= 0) if invertir else (var >= 0)
-        color = "var(--verde)" if favorable else "var(--rojo)"
-        flecha = "▲" if var >= 0 else "▼"
-        pct = f"{real/ppto*100:,.0f}%" if ppto else "—"
-        return f"""
-        <div class="kpi">
-          <div class="kpi-l">{_e(label)}</div>
-          <div class="kpi-v">{_m(real)}</div>
-          <div class="kpi-d" style="color:{color}">{flecha} {_m(abs(var))} vs ppto · {pct}</div>
-          <div class="kpi-o">Objetivo {_m(ppto)}</div>
-        </div>"""
+    def kpi_card(label, real, ppto, desvio, nota=""):
+        pct = _pct(real, ppto)
+        pie = f"Presupuesto {fmt_m(ppto)}" + (f" · {fmt_pct(pct)} ejecutado" if pct else "")
+        flecha = "▲" if desvio >= 0 else "▼"
+        return (f'<div class="kpi"><div class="kpi-l">{_e(label)}</div>'
+                f'<div class="kpi-v">{fmt_m(real)}</div>'
+                f'<div class="kpi-d {_clase_signo(desvio)}">{flecha} {fmt_m(desvio, signo=True)} '
+                f'vs presupuesto</div><div class="kpi-o">{_e(pie)}</div>'
+                + (f'<div class="kpi-o">{_e(nota)}</div>' if nota else "") + '</div>')
 
-    # Puente en SVG
-    puente = rep["puente"]
-    efectos = puente[puente["Tipo"] == "efecto"]
-    ini = float(puente.iloc[0]["Efecto"])
-    fin = float(puente.iloc[-1]["Efecto"])
-    barras = [("EBIT Ppto", ini, "total")]
-    for _, r in efectos.iterrows():
-        barras.append((str(r["Concepto"]), float(r["Efecto"]), "efecto"))
-    barras.append(("EBIT Real", fin, "total"))
+    kpis = "".join([
+        kpi_card("Ventas", kpi["ventas_r"], kpi["ventas_p"], kpi["ventas_r"] - kpi["ventas_p"]),
+        kpi_card("Utilidad bruta", kpi["ub_r"], kpi["ub_p"], kpi["ub_r"] - kpi["ub_p"]),
+        kpi_card("Gasto controlable", kpi["ctrl_r"], kpi["ctrl_p"], kpi["ctrl_p"] - kpi["ctrl_r"],
+                 "Costo fijo + OPEX"),
+        kpi_card("EBIT", kpi["ebit_r"], kpi["ebit_p"], kpi["ebit_r"] - kpi["ebit_p"]),
+    ])
 
-    acum, puntos = ini, []
-    for nombre, val, tipo in barras:
-        if tipo == "total":
-            # Las barras de total arrancan del cero; el presupuesto de estos
-            # meses puede ser negativo (baja temporada), así que el rango tiene
-            # que admitir barras hacia abajo.
-            lo, hi = min(0.0, val), max(0.0, val)
+    titular = rep["titular"]
+    tit_html = (f'<p class="lead">{_et(titular[0])}</p>' +
+                "".join(f"<p>{_et(t)}</p>" for t in titular[1:]))
+
+    serie = rep["serie"]
+    graficos = (_grafico_meses(serie, "Ventas real", "Ventas ppto", "Ventas por mes",
+                               meta["mes_corte"]) +
+                _grafico_meses(serie, "EBIT real", "EBIT ppto", "EBIT por mes",
+                               meta["mes_corte"]))
+    filas_serie = "".join(
+        f"<tr><td>{_e(r['Mes'])}</td><td class='num'>{fmt_m(r['Ventas real'])}</td>"
+        f"<td class='num'>{fmt_m(r['Ventas ppto'])}</td><td class='num'>{fmt_m(r['EBIT real'])}</td>"
+        f"<td class='num'>{fmt_m(r['EBIT ppto'])}</td></tr>" for _, r in serie.iterrows())
+
+    def lista_top(df_top: pd.DataFrame, favorable: bool) -> str:
+        if df_top.empty:
+            return '<div class="vacio">Sin desviaciones sobre la materialidad.</div>'
+        items = []
+        for _, r in df_top.iterrows():
+            com = str(r["Comentario"] or "").strip()
+            if com:
+                com_html = f'<div class="com">{_e(com)}</div>'
+            elif favorable:
+                com_html = '<div class="com mute">Sin comentario · confirmar si es ahorro o factura por registrar</div>'
+            else:
+                com_html = '<div class="com mute">Sin comentario · completar en el plan de acción</div>'
+            items.append(
+                f'<div class="ti"><div class="ti-h"><span class="ti-n">{_e(r["_nombre"])}</span>'
+                f'<span class="ti-v {_clase_signo(r["Desvío"])}">{fmt_m(r["Desvío"], signo=True)}</span></div>'
+                f'<div class="sub">{_e(r["Centro de costo"])} · real {fmt_m(r["Real YTD"])} · '
+                f'ppto {fmt_m(r["Ppto YTD"])} · {_e(str(r["Tipo de brecha"]).lower())}</div>'
+                f'{com_html}</div>')
+        return "".join(items)
+
+    escenarios = f"""
+      <div class="esc"><div class="kpi-l">Si se mantiene el ritmo de {_e(meta['rec_lbl'])}</div>
+        <div class="kpi-v">{fmt_m(kpi['ebit_cierre_tend'])}</div>
+        <div class="kpi-o">EBIT al cierre · ventas {fmt_m(kpi['ventas_cierre_tend'])}</div></div>
+      <div class="esc"><div class="kpi-l">Si se cumple el presupuesto que falta</div>
+        <div class="kpi-v">{fmt_m(kpi['ebit_cierre_ppto'])}</div>
+        <div class="kpi-o">EBIT al cierre · ventas {fmt_m(kpi['ventas_cierre_ppto'])}</div></div>
+      <div class="esc ref"><div class="kpi-l">Presupuesto anual</div>
+        <div class="kpi-v">{fmt_m(kpi['ebit_ppto_ano'])}</div>
+        <div class="kpi-o">EBIT · ventas {fmt_m(kpi['ventas_ppto_ano'])}</div></div>"""
+
+    # P&L
+    filas_pl = []
+    for _, r in rep["pl"].iterrows():
+        filas_pl.append(
+            f'<tr class="{"sub" if r["_subtotal"] else ""}"><td>{_e(r["Línea"])}</td>'
+            f'<td class="num">{fmt_m(r["Real YTD"])}</td><td class="num">{fmt_m(r["Ppto YTD"])}</td>'
+            f'<td class="num {_clase_signo(r["Desvío"])}">{fmt_m(r["Desvío"], signo=True)}</td>'
+            f'<td class="num hm">{fmt_pct(r["% Ejec."])}</td>'
+            f'<td class="num hm">{fmt_pct(r["% Ppto Año consumido"])}</td></tr>')
+    filas_mg = "".join(
+        f"<tr><td>{_e(r['Margen'])}</td><td class='num'>{fmt_pct(r['Real'], 1)}</td>"
+        f"<td class='num'>{fmt_pct(r['Ppto'], 1)}</td>"
+        f"<td class='num {_clase_signo(r['Δ pp'] * 1e6)}'>{'+' if r['Δ pp'] >= 0 else '−'}"
+        f"{_num(abs(r['Δ pp']))} pp</td></tr>" for _, r in rep["margenes"].iterrows())
+
+    # Puente horizontal: etiquetas completas y legible en celular
+    pu = rep["puente"]
+    acum, filas = float(pu.iloc[0]["Efecto"]), []
+    for _, r in pu.iterrows():
+        v = float(r["Efecto"])
+        if r["Tipo"] == "efecto":
+            lo, hi = sorted([acum, acum + v])
+            acum += v
         else:
-            base = acum
-            acum += val
-            lo, hi = min(base, acum), max(base, acum)
-        puntos.append((nombre, lo, hi, val, tipo))
+            lo, hi = min(0.0, v), max(0.0, v)
+        filas.append((str(r["Concepto"]), lo, hi, v, r["Tipo"]))
+    vmin = min([f[1] for f in filas] + [0.0])
+    vmax = max([f[2] for f in filas] + [0.0])
+    rango = (vmax - vmin) or 1.0
+    z = (0 - vmin) / rango * 100
+    puente_html = "".join(
+        f'<div class="pr{" tot" if t != "efecto" else ""}"><div class="pr-l">{_e(n)}</div>'
+        f'<div class="pr-t"><div class="pr-z" style="left:{z:.2f}%"></div>'
+        f'<div class="pr-b {"tb" if t != "efecto" else ("gb" if v >= 0 else "rb")}" '
+        f'style="left:{(lo - vmin) / rango * 100:.2f}%;width:{max((hi - lo) / rango * 100, .4):.2f}%"></div></div>'
+        f'<div class="pr-v {"" if t != "efecto" else _clase_signo(v)}">'
+        f'{fmt_m(v) if t != "efecto" else fmt_m(v, signo=True)}</div></div>'
+        for n, lo, hi, v, t in filas)
 
-    vals = [p[2] for p in puntos] + [p[1] for p in puntos] + [0.0]
-    vmax, vmin = max(vals), min(vals)
-    rango = (vmax - vmin) or 1
-
-    ancho_barra, sep = 62, 20
-    w = max(760, len(puntos) * (ancho_barra + sep) + 60)
-    alto_plot, y_base, hgt = 190, 235, 320   # y_base = piso del área de barras
-
-    def _y(v: float) -> float:
-        return y_base - (v - vmin) / rango * alto_plot
-
-    y_cero = _y(0.0)
-    svg = []
-    for i, (nombre, lo, hi, val, tipo) in enumerate(puntos):
-        x = 40 + i * (ancho_barra + sep)
-        y_top, y_bot = _y(hi), _y(lo)
-        color = "#2D0050" if tipo == "total" else ("#0F6E56" if val >= 0 else "#C4007A")
-        alto = max(y_bot - y_top, 2)
-        svg.append(f'<rect x="{x}" y="{y_top:.1f}" width="{ancho_barra}" height="{alto:.1f}" '
-                   f'fill="{color}" rx="3"/>')
-        # En los totales el signo es parte de la cifra (el EBIT presupuestado de
-        # estos meses puede ser negativo); en los efectos indica si suma o resta.
-        prefijo = ("−" if val < 0 else "") if tipo == "total" else ("+" if val >= 0 else "−")
-        svg.append(f'<text x="{x + ancho_barra/2:.0f}" y="{y_top - 7:.1f}" text-anchor="middle" '
-                   f'font-size="10.5" font-weight="700" fill="{color}">'
-                   f'{prefijo}{abs(val)/1e6:,.1f}M</text>')
-        etiqueta = nombre if len(nombre) <= 24 else nombre[:23] + "…"
-        y_lbl = y_base + 16
-        svg.append(f'<text x="{x + ancho_barra/2:.0f}" y="{y_lbl}" text-anchor="end" '
-                   f'font-size="9.5" fill="#666" '
-                   f'transform="rotate(-35 {x + ancho_barra/2:.0f} {y_lbl})">'
-                   f'{_e(etiqueta)}</text>')
-    svg_puente = (f'<svg viewBox="0 0 {w} {hgt}" width="100%" preserveAspectRatio="xMinYMin meet" '
-                  f'role="img" aria-label="Puente de EBIT">'
-                  f'<line x1="30" y1="{y_cero:.1f}" x2="{w-10}" y2="{y_cero:.1f}" '
-                  f'stroke="#D9C7E6" stroke-dasharray="3 3"/>'
-                  f'<text x="24" y="{y_cero + 3:.1f}" text-anchor="end" font-size="9" '
-                  f'fill="#A9A9B8">0</text>'
-                  + "".join(svg) + "</svg>")
-
-    # Barras por centro de costo
+    # Centros de costo
     df_cc = rep["cc"]
     filas_cc = []
     if not df_cc.empty:
         tope = max(float(df_cc[["Real YTD", "Ppto YTD"]].max().max()), 1)
         for _, r in df_cc.iterrows():
-            pr = float(r["Real YTD"]) / tope * 100
-            pp = float(r["Ppto YTD"]) / tope * 100
-            imp = float(r["Impacto resultado"])
-            color = "var(--verde)" if imp >= 0 else "var(--rojo)"
-            filas_cc.append(f"""
-            <div class="ccrow">
-              <div class="ccname">{_e(r['Centro de costo'])}
-                <span class="ccsub">{_p(r['% Ppto Año consumido'])} del ppto anual ·
-                  {_e(r['Sociedad'])}</span></div>
-              <div class="ccbars">
-                <div class="bar real" style="width:{pr:.1f}%"></div>
-                <div class="tick" style="left:{pp:.1f}%"></div>
-              </div>
-              <div class="ccval">{_m(r['Real YTD'])}<span class="ccppto"> / {_m(r['Ppto YTD'])}</span></div>
-              <div class="ccimp" style="color:{color}">{'+' if imp >= 0 else '−'}{_m(abs(imp))}</div>
-            </div>""")
+            filas_cc.append(
+                f'<div class="ccrow"><div class="ccname">{_e(r["Centro de costo"])}'
+                f'<span class="sub">{fmt_pct(r["% Ppto Año consumido"])} del presupuesto anual · '
+                f'{_e(r["Sociedad"])}</span></div>'
+                f'<div class="ccbars"><div class="ccb" style="width:{float(r["Real YTD"])/tope*100:.1f}%"></div>'
+                f'<div class="cct" style="left:{float(r["Ppto YTD"])/tope*100:.1f}%"></div></div>'
+                f'<div class="ccval">{fmt_m(r["Real YTD"])}<span class="sub"> / {fmt_m(r["Ppto YTD"])}</span></div>'
+                f'<div class="ccimp {_clase_signo(r["Desvío"])}">{fmt_m(r["Desvío"], signo=True)}</div></div>')
 
-    # Tabla de acción
-    df_ac = rep["accion"]
-    filas_ac = []
+    # Plan de acción (tarjetas)
     piso_mes = meta["umbral"] / max(meta["n_meses"], 1)
-
-    def _strip_meses(real_mes, ppto_mes) -> str:
-        """Franja mes a mes: marca en qué meses la cuenta se pasó del presupuesto."""
+    filas_ac = []
+    for _, r in rep["accion"].iterrows():
         chips = []
-        for i, etiqueta in enumerate(meta["meses"]):
-            rv = float(real_mes[i])
-            pv = float(ppto_mes[i])
-            dif = rv - pv
-            if dif > piso_mes:
-                clase = "up"
-            elif dif < -piso_mes:
-                clase = "down"
-            else:
-                clase = "flat"
-            tip = (f"{etiqueta}: real {_m(rv)} · ppto {_m(pv)} · "
-                   f"{'+' if dif >= 0 else '−'}{_m(abs(dif))}")
-            chips.append(f'<span class="mchip {clase}" title="{_e(tip)}">{_e(etiqueta)}</span>')
-        return f'<div class="strip">{"".join(chips)}</div>'
+        for i, et in enumerate(meta["meses"]):
+            dm = _efecto(r["_clasif"], float(r["_real_mes"][i]) - float(r["_ppto_mes"][i]))
+            clase = "dn" if dm < -piso_mes else ("up" if dm > piso_mes else "")
+            chips.append(f'<span class="mchip {clase}" title="{_e(et)}: {fmt_m(dm, signo=True)}">{_e(et)}</span>')
+        tipo = str(r["Tipo de brecha"])
+        clase_t = {"Recurrente": "tag-rec", "Puntual": "tag-pun", "No presupuestado": "tag-nop",
+                   "Desfase de calendario": "tag-des"}.get(tipo, "tag-mix")
+        anual = r["Si se mantiene 12m"]
+        compromiso = " · ".join(x for x in [
+            str(r["Acción comprometida"] or "").strip(),
+            str(r["Responsable"] or "").strip(),
+            (pd.Timestamp(r["Fecha compromiso"]).strftime("%d-%m-%Y")
+             if not _es_nulo(r["Fecha compromiso"]) and r["Fecha compromiso"] else "")] if x)
+        expl = str(r["Explicación"] or "").strip()
+        filas_ac.append(f"""
+        <div class="ac">
+          <div class="ac-h"><b>{_e(r['_nombre'])}</b>
+            <span class="tag {clase_t}">{_e(tipo)}</span></div>
+          <div class="sub">{_e(r['Centro de costo'])} · {_e(r['Cuenta'].split(' ')[0])} ·
+            <span class="soc">{_e(r['Sociedad'])}</span></div>
+          <div class="ac-n"><span>Real <b>{fmt_m(r['Real YTD'])}</b></span>
+            <span>Ppto <b>{fmt_m(r['Ppto YTD'])}</b></span>
+            <span>Desvío <b class="neg">{fmt_m(r['Desvío'], signo=True)}</b></span>
+            {f"<span>En 12 meses <b>{fmt_m(anual, signo=True)}</b></span>" if not _es_nulo(anual) else ""}</div>
+          <div class="strip">{''.join(chips)}</div>
+          {f'<div class="com"><b>Qué pasó:</b> {_e(expl)}</div>' if expl else '<div class="com mute">Sin explicación registrada</div>'}
+          {f'<div class="com"><b>Acción:</b> {_e(compromiso)}</div>' if compromiso else ''}
+        </div>""")
 
-    if not df_ac.empty:
-        for _, r in df_ac.iterrows():
-            imp = float(r["Impacto resultado"])
-            tipo = str(r["Tipo de brecha"])
-            clase = {"Recurrente": "tag-rec", "Puntual": "tag-pun",
-                     "No presupuestado": "tag-nop",
-                     "Desfase de calendario": "tag-des"}.get(tipo, "tag-mix")
-            anual = float(r["Impacto anualizado"]) if pd.notna(r["Impacto anualizado"]) else 0.0
-            filas_ac.append(f"""
-            <tr>
-              <td><b>{_e(r['Cuenta'])}</b>
-                  <div class="sub">{_e(r['Centro de costo'])} ·
-                    <span class="soc">{_e(r['Sociedad'])}</span></div>
-                  {_strip_meses(r['_real_mes'], r['_ppto_mes'])}
-                  <div class="sub">Desfavorable: {_e(r['Meses con desvío desfavorable'])}</div></td>
-              <td class="num">{_m(r['Real YTD'])}</td>
-              <td class="num">{_m(r['Ppto YTD'])}</td>
-              <td class="num neg">{_m(imp)}</td>
-              <td class="num">{_p(r['% acum. brecha'])}</td>
-              <td><span class="tag {clase}">{_e(tipo)}</span>
-                  <div class="sub">{_plural(int(r['Meses desviados']), 'mes', 'meses')} ·
-                    pico {_e(r['Mes pico'])}</div></td>
-              <td class="num">{_m(anual) if anual else '—'}</td>
-            </tr>""")
-
-    # P&L
-    filas_pl = []
-    for _, r in rep["pl"].iterrows():
-        sub = bool(r["_subtotal"])
-        var = float(r["Varianza"])
-        imp = float(r["Impacto resultado"])
-        filas_pl.append(f"""
-        <tr class="{'sub' if sub else ''}">
-          <td>{_e(r['Línea'])}</td>
-          <td class="num">{_m(r['Real YTD'])}</td>
-          <td class="num">{_m(r['Ppto YTD'])}</td>
-          <td class="num">{_m(var)}</td>
-          <td class="num {'pos' if imp >= 0 else 'neg'}">{'+' if imp >= 0 else '−'}{_m(abs(imp))}</td>
-          <td class="num">{_p(r['% Ejec.'])}</td>
-          <td class="num">{_p(r['% Ppto Año consumido'])}</td>
-        </tr>""")
-
-    def _clase_pp(delta: float) -> str:
-        # Bajo una décima de punto no hay noticia: se muestra neutro
-        if abs(delta) < 0.05:
-            return ""
-        return "pos" if delta > 0 else "neg"
-
-    filas_mg = "".join(
-        f"<tr><td>{_e(r['Margen'])}</td><td class='num'>{_p(r['Real'])}</td>"
-        f"<td class='num'>{_p(r['Ppto'])}</td>"
-        f"<td class='num {_clase_pp(r['Δ pp'])}'>{r['Δ pp']:+.1f} pp</td></tr>"
-        for _, r in rep["margenes"].iterrows())
-
-    alertas = "".join(f"<li>{_e(a)}</li>" for a in rep["alertas"])
+    alertas = "".join(f"<li>{_et(a)}</li>" for a in rep["alertas"])
     escalas = "".join(f"<li>{_e(x)}</li>" for x in rep["escalas"])
-    conclusiones = "".join(f"<li>{_e(c)}</li>" for c in rep["conclusiones"])
     bases = "".join(f"<li>{_e(b)}</li>" for b in rep["bases"])
+    conclusiones = "".join(f"<li>{_et(c)}</li>" for c in rep["conclusiones"])
 
     return f"""<!DOCTYPE html>
 <html lang="es"><head><meta charset="utf-8">
@@ -1430,154 +1539,194 @@ def to_html(rep: dict) -> str:
 <title>Reporte de Gerencia · Kreems · {_e(meta['periodo_lbl'])}</title>
 <style>
   :root {{
-    --morado:#2D0050; --morado2:#6B2C91; --fucsia:#C4007A;
-    --verde:#0F6E56; --rojo:#CC0000; --borde:#EDE4F3; --gris:#7A7A8C;
+    --morado:#2D0050; --morado2:#6B2C91; --fucsia:#C4007A; --verde:#0F6E56; --rojo:#B42318;
+    --borde:#EDE4F3; --gris:#6B6B7B; --tenue:#9A9AAA; --fondo:#F7F5FA; --surface:#FFFFFF;
   }}
   * {{ box-sizing:border-box; }}
-  body {{ margin:0; background:#F7F5FA; color:#22222E;
-         font-family:'Inter',-apple-system,'Segoe UI',Roboto,sans-serif; font-size:14px; }}
-  .wrap {{ max-width:1180px; margin:0 auto; padding:0 22px 64px; }}
-  header {{ background:var(--morado); color:#fff; padding:26px 0 22px; margin-bottom:26px; }}
+  body {{ margin:0; background:var(--fondo); color:#22222E;
+         font-family:'Inter',-apple-system,'Segoe UI',Roboto,sans-serif; font-size:14px; line-height:1.45; }}
+  .wrap {{ max-width:1120px; margin:0 auto; padding:0 16px 56px; }}
+  header {{ background:var(--morado); color:#fff; padding:22px 0 18px; margin-bottom:20px; }}
   header .wrap {{ padding-bottom:0; }}
-  h1 {{ margin:0 0 6px; font-size:25px; font-weight:800; letter-spacing:-0.3px; }}
-  .hsub {{ opacity:.72; font-size:13.5px; }}
-  .hmix {{ opacity:.55; font-size:11.5px; margin-top:3px; }}
-  h2 {{ font-size:17px; color:var(--morado); margin:34px 0 12px;
-        border-bottom:2px solid var(--borde); padding-bottom:7px; }}
-  .kpis {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:14px; }}
-  .kpi {{ background:#fff; border:1px solid var(--borde); border-radius:12px; padding:15px 17px; }}
-  .kpi-l {{ font-size:11px; color:var(--gris); text-transform:uppercase;
-            letter-spacing:.5px; font-weight:600; }}
-  .kpi-v {{ font-size:26px; font-weight:800; color:var(--morado); margin:5px 0 2px; }}
-  .kpi-d {{ font-size:12.5px; font-weight:600; }}
-  .kpi-o {{ font-size:11px; color:#A9A9B8; margin-top:2px; }}
-  .card {{ background:#fff; border:1px solid var(--borde); border-radius:12px;
-           padding:18px 20px; margin-top:12px; }}
+  h1 {{ margin:0 0 4px; font-size:22px; font-weight:800; }}
+  .hsub {{ opacity:.75; font-size:13px; }}
+  h2 {{ font-size:16px; color:var(--morado); margin:30px 0 10px; }}
+  h3 {{ font-size:13px; color:var(--gris); text-transform:uppercase; letter-spacing:.4px; margin:0 0 8px; }}
+  .card {{ background:var(--surface); border:1px solid var(--borde); border-radius:12px; padding:16px 18px; }}
+  .titular p {{ margin:0 0 8px; }}
+  .titular .lead {{ font-size:18px; font-weight:700; color:var(--morado); line-height:1.35; }}
+  .kpis {{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:14px; }}
+  .kpi, .esc {{ background:var(--surface); border:1px solid var(--borde); border-radius:12px; padding:14px 16px; }}
+  .kpi-l {{ font-size:11px; color:var(--gris); text-transform:uppercase; letter-spacing:.4px; font-weight:600; }}
+  .kpi-v {{ font-size:24px; font-weight:800; color:var(--morado); margin:4px 0 2px; }}
+  .kpi-d {{ font-size:13px; font-weight:700; }}
+  .kpi-o {{ font-size:11.5px; color:var(--tenue); margin-top:2px; }}
+  .pos {{ color:var(--verde); }} .neg {{ color:var(--rojo); }}
+  .nw {{ white-space:nowrap; }}
+  .sub {{ font-size:11.5px; color:var(--gris); font-weight:400; }}
+  .charts {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }}
+  .chart {{ margin:0; background:var(--surface); border:1px solid var(--borde); border-radius:12px; padding:14px 14px 10px; }}
+  .chart figcaption {{ font-weight:700; color:var(--morado); font-size:13.5px; margin-bottom:8px; }}
+  .legend {{ display:flex; gap:16px; font-size:12px; color:var(--gris); margin:4px 0 10px; flex-wrap:wrap; }}
+  .lg-bar {{ display:inline-block; width:10px; height:12px; background:var(--fucsia); border-radius:3px 3px 0 0; vertical-align:-1px; margin-right:5px; }}
+  .lg-tk {{ display:inline-block; width:14px; height:3px; background:var(--morado2); vertical-align:3px; margin-right:5px; }}
+  .plot {{ position:relative; height:190px; margin-left:48px; }}
+  .axis {{ position:absolute; inset:0 0 20px 0; pointer-events:none; }}
+  .gl {{ position:absolute; left:0; right:0; height:1px; background:#F0EAF4; }}
+  .zl {{ position:absolute; left:0; right:0; height:1px; background:#CFC3DA; }}
+  .yl {{ position:absolute; left:-50px; width:44px; text-align:right; font-size:10.5px; color:var(--tenue); transform:translateY(50%); }}
+  .cols {{ position:absolute; inset:0; display:flex; gap:2px; }}
+  .mc {{ flex:1; display:flex; flex-direction:column; position:relative; outline:none; }}
+  .mc .ar {{ position:relative; flex:1; }}
+  .mc .bar {{ position:absolute; left:22%; right:22%; background:var(--fucsia); border-radius:4px 4px 0 0; }}
+  .mc .bar.negb {{ border-radius:0 0 4px 4px; }}
+  .mc .tk {{ position:absolute; left:8%; right:8%; height:3px; margin-bottom:-1.5px; background:var(--morado2); border-radius:2px; box-shadow:0 0 0 1px var(--surface); }}
+  .mc.fut .xl {{ color:#C2BBCB; }}
+  .mc.fut .tk {{ opacity:.55; }}
+  .mc .dl {{ position:absolute; left:50%; transform:translateX(-50%); font-size:10.5px; font-weight:700; color:#22222E; white-space:nowrap; }}
+  .mc .xl {{ height:20px; line-height:20px; text-align:center; font-size:10.5px; color:var(--gris); }}
+  .mc .tip {{ display:none; position:absolute; bottom:100%; left:50%; transform:translateX(-50%); z-index:5;
+             background:#22222E; color:#fff; font-size:11.5px; padding:6px 8px; border-radius:6px; white-space:nowrap; }}
+  .mc:hover .tip, .mc:focus .tip {{ display:block; }}
+  .mc:hover {{ background:#FAF6FC; border-radius:4px; }}
+  details {{ margin-top:8px; font-size:12.5px; }}
+  summary {{ cursor:pointer; color:var(--morado2); font-weight:600; }}
+  .two {{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }}
+  .ti {{ padding:10px 0; border-bottom:1px solid #F2ECF6; }}
+  .ti:last-child {{ border-bottom:none; }}
+  .ti-h {{ display:flex; justify-content:space-between; gap:10px; font-weight:600; }}
+  .ti-v {{ white-space:nowrap; font-variant-numeric:tabular-nums; }}
+  .com {{ font-size:12.5px; margin-top:4px; color:#33333F; }}
+  .com.mute {{ color:var(--tenue); font-style:italic; }}
+  .vacio {{ color:var(--tenue); font-size:13px; }}
+  .escs {{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; }}
+  .esc.ref {{ background:#FBF9FC; }}
   table {{ width:100%; border-collapse:collapse; font-size:13px; }}
-  th {{ background:var(--morado2); color:#fff; text-align:right; padding:9px 10px;
-        font-size:11.5px; font-weight:600; }}
-  th:first-child {{ text-align:left; border-radius:6px 0 0 0; }}
-  th:last-child {{ border-radius:0 6px 0 0; }}
-  td {{ padding:8px 10px; border-bottom:1px solid #F2ECF6; }}
-  td.num {{ text-align:right; font-variant-numeric:tabular-nums; }}
+  th {{ background:var(--morado2); color:#fff; text-align:right; padding:8px 10px; font-size:11.5px; font-weight:600; }}
+  th:first-child {{ text-align:left; }}
+  td {{ padding:7px 10px; border-bottom:1px solid #F2ECF6; }}
+  td.num {{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }}
+  td.pos, td.neg {{ font-weight:600; }}
   tr.sub td {{ background:#FAF5FD; font-weight:700; color:var(--morado); }}
-  .pos {{ color:var(--verde); font-weight:600; }}
-  .neg {{ color:var(--rojo); font-weight:600; }}
-  .sub {{ font-size:11px; color:var(--gris); font-weight:400; }}
-  .soc {{ font-size:10px; background:#F1EDF6; color:var(--morado2);
-          padding:1px 6px; border-radius:4px; font-weight:600; white-space:nowrap; }}
-  ul.ins {{ margin:0; padding-left:20px; }}
-  ul.ins li {{ margin-bottom:9px; line-height:1.6; }}
-  .alerta {{ background:#FFF6F6; border:1px solid #F3D0D0; border-left:4px solid var(--rojo);
-             border-radius:9px; padding:14px 18px; }}
-  .alerta ul {{ margin:0; padding-left:19px; }}
-  .alerta li {{ margin-bottom:7px; line-height:1.55; }}
-  .ccrow {{ display:grid; grid-template-columns:190px 1fr 165px 95px;
-            align-items:center; gap:12px; padding:9px 0; border-bottom:1px solid #F2ECF6; }}
-  .ccname {{ font-weight:600; font-size:13px; }}
-  .ccsub {{ display:block; font-size:11px; color:var(--gris); font-weight:400; }}
-  .ccbars {{ position:relative; height:16px; background:#F4EFF8; border-radius:8px; }}
-  .bar.real {{ position:absolute; left:0; top:0; height:16px; background:var(--fucsia);
-               border-radius:8px; opacity:.85; }}
-  .tick {{ position:absolute; top:-3px; width:2.5px; height:22px; background:var(--morado); }}
-  .ccval {{ text-align:right; font-size:13px; font-weight:600;
-            font-variant-numeric:tabular-nums; }}
-  .ccppto {{ color:var(--gris); font-weight:400; }}
-  .ccimp {{ text-align:right; font-weight:700; font-variant-numeric:tabular-nums; }}
-  .tag {{ display:inline-block; padding:2px 9px; border-radius:20px;
-          font-size:10.5px; font-weight:700; white-space:nowrap; }}
-  .tag-rec {{ background:#FDE8E8; color:#B01919; }}
-  .tag-pun {{ background:#FFF2DC; color:#96620A; }}
-  .tag-nop {{ background:#F0E6FA; color:#5B2A87; }}
-  .tag-des {{ background:#E6F1FB; color:#1B5E96; }}
-  .tag-mix {{ background:#EFEFF3; color:#55555F; }}
-  .strip {{ display:flex; gap:3px; margin:6px 0 4px; flex-wrap:wrap; }}
-  .mchip {{ font-size:9.5px; font-weight:700; padding:1.5px 6px; border-radius:4px;
-            background:#F1EFF4; color:#9A9AA8; cursor:default; }}
-  .mchip.up {{ background:#FDE8E8; color:#B01919; }}
-  .mchip.down {{ background:#E4F3EE; color:#0F6E56; }}
-  .leyenda {{ font-size:11.5px; color:var(--gris); margin-top:10px; line-height:1.6; }}
-  footer {{ margin-top:40px; font-size:11.5px; color:var(--gris); line-height:1.7; }}
   .scroll {{ overflow-x:auto; }}
-  @media print {{ body {{ background:#fff; }} .card {{ break-inside:avoid; }} }}
+  .pr {{ display:grid; grid-template-columns:230px 1fr 90px; gap:10px; align-items:center; padding:5px 0; font-size:12.5px; }}
+  .pr.tot {{ font-weight:700; color:var(--morado); }}
+  .pr-t {{ position:relative; height:14px; }}
+  .pr-z {{ position:absolute; top:-4px; bottom:-4px; width:1px; background:#CFC3DA; }}
+  .pr-b {{ position:absolute; top:0; height:14px; border-radius:3px; }}
+  .pr-b.tb {{ background:var(--morado2); }} .pr-b.gb {{ background:var(--verde); }} .pr-b.rb {{ background:var(--fucsia); }}
+  .pr-v {{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }}
+  .ccrow {{ display:grid; grid-template-columns:200px 1fr 170px 90px; align-items:center; gap:12px;
+            padding:9px 0; border-bottom:1px solid #F2ECF6; }}
+  .ccname {{ font-weight:600; font-size:13px; }} .ccname .sub {{ display:block; }}
+  .ccbars {{ position:relative; height:14px; background:#F4EFF8; border-radius:7px; }}
+  .ccb {{ position:absolute; left:0; top:0; height:14px; background:var(--fucsia); border-radius:7px; }}
+  .cct {{ position:absolute; top:-3px; width:3px; height:20px; background:var(--morado2); border-radius:2px; box-shadow:0 0 0 1px var(--surface); }}
+  .ccval {{ text-align:right; font-weight:600; font-variant-numeric:tabular-nums; }}
+  .ccimp {{ text-align:right; font-weight:700; font-variant-numeric:tabular-nums; }}
+  .ac {{ padding:12px 0; border-bottom:1px solid #F2ECF6; }}
+  .ac-h {{ display:flex; justify-content:space-between; gap:10px; align-items:center; }}
+  .ac-n {{ display:flex; flex-wrap:wrap; gap:6px 18px; font-size:12.5px; margin-top:6px; color:var(--gris); }}
+  .ac-n b {{ color:#22222E; }}
+  .tag {{ display:inline-block; padding:2px 9px; border-radius:20px; font-size:10.5px; font-weight:700; white-space:nowrap; }}
+  .tag-rec {{ background:#FDE8E8; color:#B01919; }} .tag-pun {{ background:#FFF2DC; color:#8A5A08; }}
+  .tag-nop {{ background:#F0E6FA; color:#5B2A87; }} .tag-des {{ background:#E6F1FB; color:#1B5E96; }}
+  .tag-mix {{ background:#EFEFF3; color:#55555F; }}
+  .soc {{ font-size:10.5px; background:#F1EDF6; color:var(--morado2); padding:1px 6px; border-radius:4px; font-weight:600; white-space:nowrap; }}
+  .strip {{ display:flex; gap:3px; margin:8px 0 2px; flex-wrap:wrap; }}
+  .mchip {{ font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px; background:#F1EFF4; color:#9A9AA8; }}
+  .mchip.dn {{ background:#FDE8E8; color:#B01919; }} .mchip.up {{ background:#E4F3EE; color:#0F6E56; }}
+  .leyenda {{ font-size:11.5px; color:var(--gris); margin-top:10px; line-height:1.6; }}
+  ul.ins {{ margin:0; padding-left:18px; }} ul.ins li {{ margin-bottom:8px; }}
+  footer {{ margin-top:34px; font-size:12px; color:var(--gris); }}
+  footer ul {{ padding-left:18px; }}
+  .alerta {{ border-left:4px solid var(--fucsia); }}
+  @media (max-width:820px) {{
+    .kpis {{ grid-template-columns:1fr 1fr; }}
+    .charts, .two, .escs {{ grid-template-columns:1fr; }}
+  }}
+  @media (max-width:560px) {{
+    h1 {{ font-size:19px; }}
+    .titular .lead {{ font-size:16px; }}
+    .kpi-v {{ font-size:20px; }}
+    .hm {{ display:none; }}
+    .pr {{ grid-template-columns:1fr 78px; }}
+    .pr-t {{ grid-column:1 / -1; grid-row:2; }}
+    .ccrow {{ grid-template-columns:1fr auto; }}
+    .ccbars {{ grid-column:1 / -1; grid-row:2; }}
+    .ccval {{ grid-column:1; grid-row:3; text-align:left; }}
+    .ccimp {{ grid-column:2; grid-row:3; }}
+    .plot {{ height:160px; margin-left:42px; }}
+    .yl {{ left:-44px; width:40px; font-size:9.5px; }}
+    .mc .xl {{ font-size:9.5px; }}
+    .mc .dl {{ font-size:9.5px; }}
+  }}
+  @media print {{ body {{ background:#fff; }} .card, .chart, .kpi, .ac {{ break-inside:avoid; }} header {{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }} }}
 </style></head><body>
 <header><div class="wrap">
-  <h1>Reporte de Gerencia — Real vs Presupuesto</h1>
-  <div class="hsub">Kreems · {_e(meta['sociedad'])} · {_e(meta['periodo_lbl'])}
-   · {meta['n_meses']} de 12 meses · generado {_e(meta['generado'])}</div>
-  <div class="hmix">Facturación del periodo: {_e(meta['mix_sociedad'])}</div>
+  <h1>¿Cómo vamos con el presupuesto?</h1>
+  <div class="hsub">Kreems · {_e(meta['sociedad'])} · acumulado {_e(meta['periodo_lbl'])}
+    ({meta['n_meses']} de 12 meses) · generado {_e(meta['generado'])}</div>
 </div></header>
 <div class="wrap">
 
-  <div class="kpis">
-    {kpi_card("Ventas", kpi['ventas_r'], kpi['ventas_p'])}
-    {kpi_card("Utilidad Bruta", kpi['ub_r'], kpi['ub_p'])}
-    {kpi_card("EBIT", kpi['ebit_r'], kpi['ebit_p'])}
-    {kpi_card("Gasto total", kpi['gasto_r'], kpi['gasto_p'], invertir=True)}
+  <div class="card titular">{tit_html}</div>
+  <div class="kpis">{kpis}</div>
+
+  <h2>Mes a mes</h2>
+  <div class="legend"><span><span class="lg-bar"></span>Real</span>
+    <span><span class="lg-tk"></span>Presupuesto</span>
+    <span>Toca o pasa el cursor sobre un mes para ver el detalle</span></div>
+  <div class="charts">{graficos}</div>
+  <details><summary>Ver cifras mensuales</summary>
+    <div class="scroll"><table><thead><tr><th>Mes</th><th>Ventas real</th><th>Ventas ppto</th>
+      <th>EBIT real</th><th>EBIT ppto</th></tr></thead><tbody>{filas_serie}</tbody></table></div>
+  </details>
+
+  <h2>Principales desviaciones</h2>
+  <div class="two">
+    <div class="card"><h3>Lo que más resta al resultado</h3>{lista_top(rep['top_desfav'], False)}</div>
+    <div class="card"><h3>Lo que más suma al resultado</h3>{lista_top(rep['top_fav'], True)}</div>
   </div>
 
-  {"<h2>Advertencias sobre la base de comparación</h2><div class='alerta'><ul>" + alertas + "</ul></div>" if alertas else ""}
+  <h2>Cierre del año (EBIT)</h2>
+  <div class="escs">{escenarios}</div>
+  <div class="leyenda">El escenario de tendencia ajusta el presupuesto de los meses que faltan
+    por el ritmo real/presupuesto de cada línea en {_e(meta['rec_lbl'])}.</div>
 
-  <h2>Conclusiones</h2>
-  <div class="card"><ul class="ins">{conclusiones}</ul></div>
-
-  <h2>Estado de Resultados acumulado</h2>
+  <h2>Estado de resultados acumulado</h2>
   <div class="card scroll">
-    <table>
-      <thead><tr><th>Línea</th><th>Real YTD</th><th>Ppto YTD</th><th>Varianza</th>
-        <th>Impacto resultado</th><th>% Ejec.</th><th>% Ppto Año</th></tr></thead>
-      <tbody>{''.join(filas_pl)}</tbody>
-    </table>
-    <div class="leyenda">«Ppto YTD» es el presupuesto de los mismos meses acumulados,
-      no el anual. «Impacto resultado» ya viene con el signo del efecto sobre el EBIT:
-      en gastos, gastar de más resta.</div>
-  </div>
-  <div class="card scroll">
-    <table>
-      <thead><tr><th>Margen</th><th>Real</th><th>Ppto</th><th>Δ</th></tr></thead>
-      <tbody>{filas_mg}</tbody>
-    </table>
+    <table><thead><tr><th>Línea</th><th>Real</th><th>Presupuesto</th><th>Desvío</th>
+      <th class="hm">% Ejec.</th><th class="hm">% del año</th></tr></thead>
+      <tbody>{''.join(filas_pl)}</tbody></table>
+    <table style="margin-top:14px"><thead><tr><th>Margen</th><th>Real</th><th>Presupuesto</th><th>Δ</th></tr></thead>
+      <tbody>{filas_mg}</tbody></table>
+    <div class="leyenda">Presupuesto = el de los mismos meses acumulados, no el anual.
+      Desvío positivo = favorable al resultado.</div>
   </div>
 
   <h2>Puente de EBIT — de dónde sale la diferencia</h2>
-  <div class="card scroll">
-    {svg_puente}
-    <div class="leyenda">El efecto de ventas está valorizado al margen de contribución
-      presupuestado y el costo variable se mide contra el que correspondería a las ventas
-      reales, para que una caída de ventas no aparezca como ahorro de costo.</div>
-  </div>
+  <div class="card">{puente_html}
+    <div class="leyenda">Verde suma al EBIT, fucsia lo resta. El efecto de ventas está valorizado
+      al margen de contribución presupuestado, para que una caída de ventas no aparezca como
+      ahorro de costo variable.</div></div>
 
-  <h2>Gasto por centro de costo</h2>
-  <div class="card">
-    {''.join(filas_cc) if filas_cc else '<div class="leyenda">Sin datos.</div>'}
-    <div class="leyenda">Barra fucsia = gasto real acumulado · marca morada = presupuesto
-      de los mismos meses · última columna = impacto sobre el resultado.</div>
-  </div>
+  <h2>Gasto controlable por centro de costo</h2>
+  <div class="card">{''.join(filas_cc) or '<div class="vacio">Sin datos.</div>'}
+    <div class="leyenda">Costo fijo + OPEX. Barra = real acumulado · marca = presupuesto de
+      los mismos meses · a la derecha, el desvío (positivo = bajo presupuesto).</div></div>
 
-  <h2>Desviaciones que explican la brecha</h2>
-  <div class="card scroll">
-    <table>
-      <thead><tr><th>Cuenta / centro de costo</th><th>Real YTD</th><th>Ppto YTD</th>
-        <th>Impacto</th><th>% acum. brecha</th><th>Tipo de brecha</th>
-        <th>Si se mantiene 12m</th></tr></thead>
-      <tbody>{''.join(filas_ac) if filas_ac else '<tr><td colspan="7">Sin desviaciones sobre el umbral de materialidad.</td></tr>'}</tbody>
-    </table>
-    <div class="leyenda">
-      La franja de meses bajo cada cuenta marca en <span class="mchip up">rojo</span> los
-      meses en que se pasó del presupuesto, en <span class="mchip down">verde</span> los que
-      quedaron bajo y en <span class="mchip">gris</span> los que fueron en línea (pasa el
-      cursor por encima para ver real, presupuesto y diferencia del mes).<br>
-      <b>Recurrente</b>: se repite mes a mes, es estructural y se puede anualizar ·
-      <b>Puntual</b>: concentrado en un mes ·
-      <b>Desfase de calendario</b>: el acumulado cuadra, el gasto cayó en otros meses ·
-      <b>No presupuestado</b>: hay gasto sin presupuesto asignado.
-    </div>
-  </div>
+  {f'<h2>Lectura del análisis</h2><div class="card"><ul class="ins">{conclusiones}</ul></div>' if conclusiones else ''}
+
+  <h2>Plan de acción</h2>
+  <div class="card">{''.join(filas_ac) or '<div class="vacio">Sin desviaciones desfavorables sobre la materialidad.</div>'}
+    <div class="leyenda">Desvío desfavorable sobre la materialidad: {fmt_m(-rep['total_desfavorable'])};
+      estas líneas explican al menos el 80%. Meses en <span class="mchip dn">rojo</span> = en contra
+      del presupuesto, <span class="mchip up">verde</span> = a favor.</div></div>
 
   <footer>
-    <b>Cómo leer las cifras</b>
-    <ul>{escalas}</ul>
-    <b>Bases y criterios</b>
-    <ul>{bases}</ul>
+    {f'<b>Base de comparación</b><ul>{alertas}</ul>' if alertas else ''}
+    <b>Cómo leer las cifras</b><ul>{escalas}</ul>
+    <b>Criterios</b><ul>{bases}</ul>
   </footer>
 </div></body></html>"""
