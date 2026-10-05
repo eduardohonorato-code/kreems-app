@@ -1479,20 +1479,39 @@ def to_html(rep: dict) -> str:
         f'{fmt_m(v) if t != "efecto" else fmt_m(v, signo=True)}</div></div>'
         for n, lo, hi, v, t in filas)
 
-    # Centros de costo
+    # Centros de costo: cada barra es el gasto real como % de SU presupuesto de los
+    # mismos meses; la marca fija es el 100%. Así se lee la holgura de cada uno
+    # (una escala común en pesos solo mostraba quién gasta más).
     df_cc = rep["cc"]
     filas_cc = []
     if not df_cc.empty:
-        tope = max(float(df_cc[["Real YTD", "Ppto YTD"]].max().max()), 1)
-        for _, r in df_cc.iterrows():
+        visibles = df_cc[(df_cc["Real YTD"].abs() >= meta["umbral"]) |
+                         (df_cc["Ppto YTD"].abs() >= meta["umbral"])]
+        ejecs = [float(x) for x in visibles["% Ejec."] if not _es_nulo(x)]
+        tope = max([1.15] + [e * 1.05 for e in ejecs])
+        marca = 1 / tope * 100
+        tramo = meta["periodo_lbl"].rsplit(" ", 1)[0]          # 'Ene–Ago'
+        for _, r in visibles.iterrows():
+            ejec = r["% Ejec."]
+            if _es_nulo(ejec):
+                ancho, txt_ejec = 100.0, "sin presupuesto"
+            else:
+                ancho = min(float(ejec), tope) / tope * 100
+                txt_ejec = f"{fmt_pct(ejec)} del presupuesto {tramo}"
+            sobre = (not _es_nulo(ejec)) and float(ejec) > 1
             filas_cc.append(
                 f'<div class="ccrow"><div class="ccname">{_e(r["Centro de costo"])}'
-                f'<span class="sub">{fmt_pct(r["% Ppto Año consumido"])} del presupuesto anual · '
-                f'{_e(r["Sociedad"])}</span></div>'
-                f'<div class="ccbars"><div class="ccb" style="width:{float(r["Real YTD"])/tope*100:.1f}%"></div>'
-                f'<div class="cct" style="left:{float(r["Ppto YTD"])/tope*100:.1f}%"></div></div>'
-                f'<div class="ccval">{fmt_m(r["Real YTD"])}<span class="sub"> / {fmt_m(r["Ppto YTD"])}</span></div>'
-                f'<div class="ccimp {_clase_signo(r["Desvío"])}">{fmt_m(r["Desvío"], signo=True)}</div></div>')
+                f'<span class="sub">{_e(r["Sociedad"])} · {fmt_pct(r["% Ppto Año consumido"])} '
+                f'del presupuesto anual</span></div>'
+                f'<div class="ccbars"><div class="ccb{" over" if sobre else ""}" style="width:{ancho:.1f}%"></div>'
+                f'<div class="cct" style="left:{marca:.1f}%"></div></div>'
+                f'<div class="ccval"><span class="nw">{txt_ejec}</span><span class="sub">{fmt_m(r["Real YTD"])} de '
+                f'{fmt_m(r["Ppto YTD"])}</span></div>'
+                f'<div class="ccimp {_clase_signo(r["Desvío"])}"><span class="nw">{fmt_m(r["Desvío"], signo=True)}</span>'
+                f'<span class="sub">{"holgura" if r["Desvío"] >= 0 else "sobre ppto"}</span></div></div>')
+        filas_cc.insert(0, f'<div class="ccrow cchead"><div></div><div class="ccbars nob">'
+                           f'<span class="ccm" style="left:{marca:.1f}%">100% = presupuesto '
+                           f'{_e(tramo)}</span></div><div></div><div></div></div>')
 
     # Plan de acción (tarjetas)
     piso_mes = meta["umbral"] / max(meta["n_meses"], 1)
@@ -1616,14 +1635,20 @@ def to_html(rep: dict) -> str:
   .pr-b {{ position:absolute; top:0; height:14px; border-radius:3px; }}
   .pr-b.tb {{ background:var(--morado2); }} .pr-b.gb {{ background:var(--verde); }} .pr-b.rb {{ background:var(--fucsia); }}
   .pr-v {{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }}
-  .ccrow {{ display:grid; grid-template-columns:200px 1fr 170px 90px; align-items:center; gap:12px;
+  .ccrow {{ display:grid; grid-template-columns:200px 1fr 235px 90px; align-items:center; gap:12px;
             padding:9px 0; border-bottom:1px solid #F2ECF6; }}
   .ccname {{ font-weight:600; font-size:13px; }} .ccname .sub {{ display:block; }}
   .ccbars {{ position:relative; height:14px; background:#F4EFF8; border-radius:7px; }}
   .ccb {{ position:absolute; left:0; top:0; height:14px; background:var(--fucsia); border-radius:7px; }}
   .cct {{ position:absolute; top:-3px; width:3px; height:20px; background:var(--morado2); border-radius:2px; box-shadow:0 0 0 1px var(--surface); }}
   .ccval {{ text-align:right; font-weight:600; font-variant-numeric:tabular-nums; }}
+  .ccval .sub, .ccimp .sub {{ display:block; white-space:nowrap; }}
   .ccimp {{ text-align:right; font-weight:700; font-variant-numeric:tabular-nums; }}
+  .ccb.over {{ background:var(--rojo); }}
+  .cchead {{ border-bottom:none; padding:0 0 2px; }}
+  .ccbars.nob {{ background:none; height:16px; }}
+  .ccm {{ position:absolute; transform:translateX(-50%); font-size:10.5px; color:var(--morado2);
+          font-weight:600; white-space:nowrap; }}
   .ac {{ padding:12px 0; border-bottom:1px solid #F2ECF6; }}
   .ac-h {{ display:flex; justify-content:space-between; gap:10px; align-items:center; }}
   .ac-n {{ display:flex; flex-wrap:wrap; gap:6px 18px; font-size:12.5px; margin-top:6px; color:var(--gris); }}
@@ -1656,6 +1681,8 @@ def to_html(rep: dict) -> str:
     .ccbars {{ grid-column:1 / -1; grid-row:2; }}
     .ccval {{ grid-column:1; grid-row:3; text-align:left; }}
     .ccimp {{ grid-column:2; grid-row:3; }}
+    .cchead > div:not(.ccbars) {{ display:none; }}
+
     .plot {{ height:160px; margin-left:42px; }}
     .yl {{ left:-44px; width:40px; font-size:9.5px; }}
     .mc .xl {{ font-size:9.5px; }}
@@ -1713,8 +1740,10 @@ def to_html(rep: dict) -> str:
 
   <h2>Gasto controlable por centro de costo</h2>
   <div class="card">{''.join(filas_cc) or '<div class="vacio">Sin datos.</div>'}
-    <div class="leyenda">Costo fijo + OPEX. Barra = real acumulado · marca = presupuesto de
-      los mismos meses · a la derecha, el desvío (positivo = bajo presupuesto).</div></div>
+    <div class="leyenda">Costo fijo + OPEX. Cada barra es el gasto real como porcentaje del
+      presupuesto de los mismos meses de ese centro de costo; la línea vertical es el 100%. Si la
+      barra no llega a la línea, va bajo presupuesto (a la derecha, la holgura en pesos); si la
+      pasa, va sobre presupuesto.</div></div>
 
   {f'<h2>Lectura del análisis</h2><div class="card"><ul class="ins">{conclusiones}</ul></div>' if conclusiones else ''}
 
