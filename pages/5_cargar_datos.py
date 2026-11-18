@@ -13,6 +13,10 @@ from utils.etl import (run_etl_acuna, run_etl_gn, run_etl_cv_sync, guardar_cv_st
                        eliminar_cv_staging, guardar_eliminacion_ic, eliminar_eliminacion_ic)
 
 _ANO = date.today().year
+# Años que se pueden cargar/editar: el anterior (cierre o datos históricos) y el actual
+ANOS_CARGA = [_ANO - 1, _ANO]
+_MESES_NOM = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
+              "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 
 st.set_page_config(page_title="Cargar Datos · Kreems", page_icon="💜", layout="wide")
 
@@ -62,6 +66,18 @@ def mostrar_resultado(resultado: dict):
         st.code("\n".join(resultado["logs"]), language=None)
 
 
+def selector_anio(key: str) -> int:
+    """Selector de año para las pestañas con ingreso manual (por defecto, el actual)."""
+    col, _ = st.columns([1, 4])
+    with col:
+        return st.selectbox("Año", ANOS_CARGA, index=len(ANOS_CARGA) - 1, key=key)
+
+
+def _indice_mes_defecto(anio: int) -> int:
+    """Mes actual si es el año en curso; diciembre si es un año anterior."""
+    return date.today().month - 1 if anio == _ANO else 11
+
+
 # ── TABS ──────────────────────────────────────────────────────
 tab_acuna, tab_gn, tab_cv, tab_ic, tab_log = st.tabs([
     "🏭  ACUÑA",
@@ -78,8 +94,8 @@ tab_acuna, tab_gn, tab_cv, tab_ic, tab_log = st.tabs([
 with tab_acuna:
     st.markdown("#### Cargar EERR ACUÑA — Excel Obuma")
     st.caption(
-        "Sube el archivo mensual de ACUÑA. El sistema detecta el periodo "
-        "automáticamente y reemplaza solo los datos de ese mes."
+        "Sube el archivo mensual de ACUÑA. El sistema detecta el periodo (mes y año, "
+        f"también {_ANO - 1}) desde el encabezado y reemplaza solo los datos de ese mes."
     )
     st.markdown("")
 
@@ -130,8 +146,8 @@ with tab_acuna:
 with tab_gn:
     st.markdown("#### Cargar EERR Gran Natural — Excel Obuma")
     st.caption(
-        "Sube el archivo mensual de Gran Natural. El periodo se detecta "
-        "automáticamente y reemplaza solo los datos de ese mes."
+        "Sube el archivo mensual de Gran Natural. El periodo (mes y año, también "
+        f"{_ANO - 1}) se detecta desde el encabezado y reemplaza solo los datos de ese mes."
     )
     st.markdown("")
 
@@ -183,7 +199,7 @@ with tab_cv:
         "Ingresa el costo variable real por sociedad y periodo. Al guardar queda "
         "en staging y en el EERR al mismo tiempo (cuenta 3.1.01.001, CC-00)."
     )
-    st.markdown("")
+    anio_cv = selector_anio("cv_anio")
 
     # Sin caché: la tabla debe reflejar lo recién guardado
     try:
@@ -211,7 +227,7 @@ with tab_cv:
             FROM stg FULL JOIN fr ON fr.periodo = stg.periodo AND fr.sociedad = stg.sociedad
             WHERE COALESCE(stg.periodo, fr.periodo) LIKE :anio
             ORDER BY 1, 2
-        """, {"anio": f"{_ANO}-%"})
+        """, {"anio": f"{anio_cv}-%"})
         df_cv["monto"] = df_cv["monto"].astype(float)
         df_cv["en_eerr"] = df_cv["en_eerr"].astype(float)
     except Exception as e:
@@ -253,14 +269,8 @@ with tab_cv:
 
         st.markdown("##### Agregar / actualizar registro")
 
-        MESES_OPTS = {
-            f"Enero ({_ANO}-01)":       f"{_ANO}-01", f"Febrero ({_ANO}-02)":     f"{_ANO}-02",
-            f"Marzo ({_ANO}-03)":       f"{_ANO}-03", f"Abril ({_ANO}-04)":       f"{_ANO}-04",
-            f"Mayo ({_ANO}-05)":        f"{_ANO}-05", f"Junio ({_ANO}-06)":       f"{_ANO}-06",
-            f"Julio ({_ANO}-07)":       f"{_ANO}-07", f"Agosto ({_ANO}-08)":      f"{_ANO}-08",
-            f"Septiembre ({_ANO}-09)":  f"{_ANO}-09", f"Octubre ({_ANO}-10)":     f"{_ANO}-10",
-            f"Noviembre ({_ANO}-11)":   f"{_ANO}-11", f"Diciembre ({_ANO}-12)":   f"{_ANO}-12",
-        }
+        MESES_OPTS = {f"{nom} ({anio_cv}-{i:02d})": f"{anio_cv}-{i:02d}"
+                      for i, nom in enumerate(_MESES_NOM, start=1)}
 
         # Por defecto, el primer mes pendiente; si no hay, el último con EERR cargado
         _periodos = list(MESES_OPTS.values())
@@ -271,7 +281,8 @@ with tab_cv:
             _fila = _con_obuma.iloc[-1]
         else:
             _fila = None
-        _idx_mes = _periodos.index(_fila["periodo"]) if _fila is not None else date.today().month - 1
+        _idx_mes = (_periodos.index(_fila["periodo"]) if _fila is not None
+                    else _indice_mes_defecto(anio_cv))
         _idx_soc = 0 if _fila is not None and _fila["sociedad"] == "ACUÑA" else 1
 
         with st.form("form_cv", clear_on_submit=True):
@@ -343,7 +354,7 @@ with tab_ic:
         "Producción). No son ventas: la eliminación resta el monto de ambos lados. "
         "Se mantiene aunque se recargue el mes desde Obuma."
     )
-    st.markdown("")
+    anio_ic = selector_anio("ic_anio")
 
     try:
         df_ic = query_live("""
@@ -370,7 +381,7 @@ with tab_ic:
             WHERE COALESCE(e.periodo, fr.periodo) LIKE :anio
               AND (e.monto IS NOT NULL OR COALESCE(fr.serv_personal_gn, 0) <> 0)
             ORDER BY 1
-        """, {"anio": f"{_ANO}-%"})
+        """, {"anio": f"{anio_ic}-%"})
         for c in ["monto", "venta_acuna", "serv_personal_gn", "en_eerr"]:
             df_ic[c] = df_ic[c].astype(float)
     except Exception as e:
@@ -411,7 +422,7 @@ with tab_ic:
                 use_container_width=True, hide_index=True,
             )
         else:
-            st.info("No hay eliminaciones ni servicios de personal en el año.")
+            st.info(f"No hay eliminaciones ni servicios de personal en {anio_ic}.")
 
     with col_f_ic:
         msg_ic = st.session_state.pop("ic_msg", None)
@@ -421,13 +432,13 @@ with tab_ic:
                 st.warning(a)
 
         st.markdown("##### Agregar / actualizar eliminación")
-        _per_ic = [f"{_ANO}-{m:02d}" for m in range(1, 13)]
+        _per_ic = [f"{anio_ic}-{m:02d}" for m in range(1, 13)]
         # Por defecto el primer mes pendiente, con el monto de GN sugerido
         _sug = pend_ic.iloc[0] if not pend_ic.empty else None
         with st.form("form_ic", clear_on_submit=True):
             per_ic = st.selectbox("Periodo", _per_ic,
                                   index=_per_ic.index(_sug["periodo"]) if _sug is not None
-                                  else date.today().month - 1)
+                                  else _indice_mes_defecto(anio_ic))
             monto_ic = st.number_input("Monto a eliminar ($)", min_value=0.0, step=100_000.0,
                                        format="%.0f",
                                        value=float(_sug["serv_personal_gn"]) if _sug is not None
