@@ -16,6 +16,7 @@ from __future__ import annotations
 import pandas as pd
 
 from utils import reporte_gerencia as rg
+from utils.db import query
 
 COL_TOTAL = "Total"
 VISTAS = ("Real", "Presupuesto", "Desvío")
@@ -113,3 +114,89 @@ def detalle_cuentas(d: pd.DataFrame, codigo_cc: str | None = None) -> pd.DataFra
 
 
 LINEAS_SUBTOTAL = {lbl for lbl, clasif, _k in rg.LINEAS_PL if clasif is None}
+
+
+# ── MES A MES (rango que puede cruzar años) ───────────────────
+
+def periodos_rango(desde: str, hasta: str) -> list[str]:
+    """'2025-11', '2026-10' → ['2025-11', '2025-12', ..., '2026-10']."""
+    a, m = int(desde[:4]), int(desde[5:7])
+    fa, fm = int(hasta[:4]), int(hasta[5:7])
+    out = []
+    while (a, m) <= (fa, fm):
+        out.append(f"{a}-{m:02d}")
+        a, m = (a + 1, 1) if m == 12 else (a, m + 1)
+    return out
+
+
+def sumar_meses(periodo: str, n: int) -> str:
+    a, m = int(periodo[:4]), int(periodo[5:7])
+    tot = a * 12 + (m - 1) + n
+    return f"{tot // 12}-{tot % 12 + 1:02d}"
+
+
+def etiqueta_periodo(periodo: str) -> str:
+    """'2025-11' → 'Nov-25'."""
+    return f"{rg.ABREV_MES[int(periodo[5:7])]}-{periodo[2:4]}"
+
+
+def cargar_rango(desde: str, hasta: str, filtro_cc: str = "") -> pd.DataFrame:
+    """Detalle periodo × sociedad × cuenta × CC del rango, todas las sociedades."""
+    return query(f"""
+        SELECT periodo, sociedad, codigo_cc, nombre_cc, codigo_cuenta, nombre_cuenta,
+               clasificacion, categoria_eerr,
+               SUM(valor_real) AS real,
+               SUM(valor_ppto) AS ppto
+        FROM marts.vw_real_vs_ppto
+        WHERE periodo BETWEEN :d AND :h {filtro_cc}
+        GROUP BY periodo, sociedad, codigo_cc, nombre_cc, codigo_cuenta, nombre_cuenta,
+                 clasificacion, categoria_eerr
+    """, {"d": desde, "h": hasta})
+
+
+def matriz_mensual(d: pd.DataFrame, vista: str, periodos: list[str]) -> pd.DataFrame:
+    """P&L con líneas en filas y meses en columnas (+ Total del rango)."""
+    cols = {}
+    for per in periodos + [COL_TOTAL]:
+        sub = d if per == COL_TOTAL else d[d["periodo"] == per]
+        r, p = _por_clasif(sub, "real"), _por_clasif(sub, "ppto")
+        cols[per] = (_lineas(r) if vista == "Real" else
+                     _lineas(p) if vista == "Presupuesto" else _lineas_desvio(r, p))
+    out = pd.DataFrame(cols)
+    out.columns = [etiqueta_periodo(c) if c != COL_TOTAL else COL_TOTAL for c in out.columns]
+    out.index.name = "Línea"
+    return out.reset_index()
+
+
+def cuentas_mensual(d: pd.DataFrame, periodos: list[str], col: str = "real") -> pd.DataFrame:
+    """Cuenta × CC en filas, meses en columnas (+ Total). Solo cuentas con movimiento."""
+    claves = ["clasificacion", "codigo_cc", "codigo_cuenta", "nombre_cuenta"]
+    piv = d.pivot_table(index=claves, columns="periodo", values=col,
+                        aggfunc="sum", fill_value=0.0)
+    for per in periodos:
+        if per not in piv.columns:
+            piv[per] = 0.0
+    piv = piv[periodos]
+    piv = piv[(piv.abs() >= 1).any(axis=1)].reset_index()
+    if piv.empty:
+        return pd.DataFrame(columns=["Línea", "Centro de costo", "Cuenta"]
+                            + [etiqueta_periodo(p) for p in periodos] + [COL_TOTAL])
+    orden = {c: i for i, (_l, c, _k) in enumerate(rg.LINEAS_PL) if c}
+    piv["_ord"] = piv["clasificacion"].map(orden).fillna(99)
+    piv = piv.sort_values(["_ord", "codigo_cc", "codigo_cuenta"])
+    out = pd.DataFrame({
+        "Línea": piv["clasificacion"].map(rg.ETIQUETA_LINEA).fillna(piv["clasificacion"]),
+        "Centro de costo": piv["codigo_cc"].map(etiqueta_cc),
+        "Cuenta": piv["codigo_cuenta"] + " " + piv["nombre_cuenta"].map(rg.nombre_legible),
+    })
+    for per in periodos:
+        out[etiqueta_periodo(per)] = piv[per].values
+    out[COL_TOTAL] = piv[periodos].sum(axis=1).values
+    return out.reset_index(drop=True)
+
+
+def meses_sin_real(d: pd.DataFrame, periodos: list[str], sociedad: str) -> list[str]:
+    """Meses del rango en que la sociedad no tiene ningún real cargado."""
+    s = d[d["sociedad"] == sociedad]
+    con = set(s.loc[s["real"].abs() >= 1, "periodo"])
+    return [p for p in periodos if p not in con]
