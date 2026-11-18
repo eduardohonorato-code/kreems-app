@@ -257,6 +257,26 @@ def _efecto(clasificacion: str, var: float) -> float:
     return var if clasificacion in INGRESOS else -var
 
 
+def normalizar_movimientos(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Deja el detalle de `cargar_movimientos` listo para armar el P&L:
+    montos numéricos, mes como entero, «Otros Ingresos» separados de las ventas
+    y los ingresos no operacionales (4.x) restando del gasto no operacional.
+    """
+    d = df.copy()
+    d["mes"] = _mes(d["periodo"])
+    d["real"] = pd.to_numeric(d["real"], errors="coerce").fillna(0.0)
+    d["ppto"] = pd.to_numeric(d["ppto"], errors="coerce").fillna(0.0)
+    d["clasificacion"] = d["clasificacion"].fillna("SIN_CLASIFICAR")
+    # Ventas = cuentas de venta; el resto de los ingresos operacionales va aparte
+    es_oi = (d["clasificacion"] == "INGRESO") & (d["categoria_eerr"] != "Ventas Brutas")
+    d.loc[es_oi, "clasificacion"] = "OTRO_INGRESO"
+    # Ingresos clasificados como no operacionales (4.2.x): restan del gasto no operacional
+    ing_noop = (d["clasificacion"] == "NO_OPERACIONAL") & d["codigo_cuenta"].str.startswith("4.")
+    d.loc[ing_noop, ["real", "ppto"]] *= -1
+    return d
+
+
 def _derivados(x: dict) -> dict:
     ub = x["INGRESO"] - x["COSTO_VAR"]
     ebit = ub + x["OTRO_INGRESO"] - x["COSTO_FIJO"] - x["OPEX"]
@@ -350,17 +370,7 @@ def construir_reporte(df: pd.DataFrame, ano: int, mes_corte: int,
     comentarios del plan de acción (utils.notas.obtener_notas_desvio).
     """
     notas = notas or {}
-    d = df.copy()
-    d["mes"] = _mes(d["periodo"])
-    d["real"] = pd.to_numeric(d["real"], errors="coerce").fillna(0.0)
-    d["ppto"] = pd.to_numeric(d["ppto"], errors="coerce").fillna(0.0)
-    d["clasificacion"] = d["clasificacion"].fillna("SIN_CLASIFICAR")
-    # Ventas = cuentas de venta; el resto de los ingresos operacionales va aparte
-    es_oi = (d["clasificacion"] == "INGRESO") & (d["categoria_eerr"] != "Ventas Brutas")
-    d.loc[es_oi, "clasificacion"] = "OTRO_INGRESO"
-    # Ingresos clasificados como no operacionales (4.2.x): restan del gasto no operacional
-    ing_noop = (d["clasificacion"] == "NO_OPERACIONAL") & d["codigo_cuenta"].str.startswith("4.")
-    d.loc[ing_noop, ["real", "ppto"]] *= -1
+    d = normalizar_movimientos(df)
 
     meses = list(range(1, mes_corte + 1))
     etiquetas_mes = [ABREV_MES[m] for m in meses]
