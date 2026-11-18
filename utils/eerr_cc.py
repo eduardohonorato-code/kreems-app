@@ -168,6 +168,29 @@ def matriz_mensual(d: pd.DataFrame, vista: str, periodos: list[str]) -> pd.DataF
     return out.reset_index()
 
 
+TOTAL_EMPRESA = "Total empresa"
+# Líneas que se muestran en cada bloque de CC aunque estén en cero
+_LINEAS_SIEMPRE = {"EBIT", "Utilidad Neta"}
+
+
+def matriz_mensual_por_cc(d: pd.DataFrame, vista: str, periodos: list[str]) -> pd.DataFrame:
+    """
+    P&L mes a mes abierto por centro de costo: un bloque de líneas por CC
+    (solo las líneas con movimiento, más EBIT y Utilidad Neta) y al final el
+    bloque «Total empresa» completo. Columnas: Centro de costo, Línea, meses, Total.
+    """
+    bloques = []
+    for cc in columnas_cc(d) + [None]:
+        sub = d if cc is None else d[d["codigo_cc"] == cc]
+        m = matriz_mensual(sub, vista, periodos)
+        if cc is not None:
+            num = [c for c in m.columns if c != "Línea"]
+            m = m[(m[num].abs() >= 1).any(axis=1) | m["Línea"].isin(_LINEAS_SIEMPRE)]
+        m.insert(0, "Centro de costo", TOTAL_EMPRESA if cc is None else etiqueta_cc(cc))
+        bloques.append(m)
+    return pd.concat(bloques, ignore_index=True)
+
+
 def cuentas_mensual(d: pd.DataFrame, periodos: list[str], col: str = "real") -> pd.DataFrame:
     """Cuenta × CC en filas, meses en columnas (+ Total). Solo cuentas con movimiento."""
     claves = ["clasificacion", "codigo_cc", "codigo_cuenta", "nombre_cuenta"]

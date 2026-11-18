@@ -96,16 +96,23 @@ def render_mes_a_mes():
     d_all = rg.normalizar_movimientos(raw)
 
     ccs = ec.columnas_cc(d_all)
+    _POR_CC = "__POR_CC__"
     with c3:
-        cc_sel = st.selectbox("Centro de costo", [None] + ccs, key="eerrcc_mm_cc",
-                              format_func=lambda c: "Todos (empresa)" if c is None
-                              else ec.etiqueta_cc(c))
+        cc_sel = st.selectbox(
+            "Centro de costo", [_POR_CC, None] + ccs, key="eerrcc_mm_cc",
+            format_func=lambda c: ("Todos, abierto por CC" if c == _POR_CC
+                                   else "Total empresa" if c is None else ec.etiqueta_cc(c)))
+    por_cc = cc_sel == _POR_CC
     with c4:
         vista = st.radio("Vista", ec.VISTAS, horizontal=True, key="eerrcc_mm_vista")
 
     def _filtrar(soc: str | None, cc: str | None) -> pd.DataFrame:
         x = d_all if soc in (None, "Todas") else d_all[d_all["sociedad"] == soc]
-        return x if cc is None else x[x["codigo_cc"] == cc]
+        return x if cc in (None, _POR_CC) else x[x["codigo_cc"] == cc]
+
+    def _matriz(x: pd.DataFrame, v: str) -> pd.DataFrame:
+        return (ec.matriz_mensual_por_cc(x, v, periodos) if por_cc
+                else ec.matriz_mensual(x, v, periodos))
 
     # Cobertura: meses sin real por sociedad
     huecos = {s: ec.meses_sin_real(d_all, periodos, s) for s in (SOC_GRAN_NATURAL, SOC_ACUNA)}
@@ -118,17 +125,25 @@ def render_mes_a_mes():
                    f"{_ANO}; el real contra presupuesto es válido en Consolidado.")
 
     d = _filtrar(sociedad_sel, cc_sel)
-    mat = ec.matriz_mensual(d, vista, periodos)
-    num = [c for c in mat.columns if c != "Línea"]
-    _cc_lbl = "Todos los centros de costo" if cc_sel is None else ec.etiqueta_cc(cc_sel)
+    mat = _matriz(d, vista)
+    num = [c for c in mat.columns if c not in ("Centro de costo", "Línea")]
+    _cc_lbl = ("Abierto por centro de costo" if por_cc
+               else "Total empresa" if cc_sel is None else ec.etiqueta_cc(cc_sel))
     st.markdown(f"##### {vista} · {_lbl_mes(desde)} a {_lbl_mes(hasta)} · "
                 f"{ETIQUETA_SOCIEDAD.get(sociedad_sel, sociedad_sel)} · {_cc_lbl}")
     es_desv = vista == "Desvío"
+    mat_vis = mat.copy()
+    cfg = {"Línea": st.column_config.TextColumn("Línea", width="medium", pinned=True)}
+    if por_cc:
+        # El nombre del CC solo en la primera fila de su bloque
+        repetida = mat_vis["Centro de costo"].eq(mat_vis["Centro de costo"].shift())
+        mat_vis.loc[repetida, "Centro de costo"] = ""
+        cfg["Centro de costo"] = st.column_config.TextColumn("Centro de costo", width="medium",
+                                                             pinned=True)
     st.dataframe(
-        _estilo(mat, montos=[] if es_desv else num, desvios=num if es_desv else []),
-        use_container_width=True, hide_index=True, height=(len(mat) + 1) * 35 + 3,
-        column_config={"Línea": st.column_config.TextColumn("Línea", width="medium",
-                                                            pinned=True)},
+        _estilo(mat_vis, montos=[] if es_desv else num, desvios=num if es_desv else []),
+        use_container_width=True, hide_index=True,
+        height=min(900, (len(mat_vis) + 1) * 35 + 3), column_config=cfg,
     )
     st.caption("La sociedad se elige en el menú lateral. El Excel trae siempre Gran Natural, "
                "ACUÑA y Consolidado por separado, más el detalle por cuenta de cada sociedad.")
@@ -148,11 +163,12 @@ def render_mes_a_mes():
     hojas = {}
     for soc, nombre in ((SOC_GRAN_NATURAL, "Gran Natural"), (SOC_ACUNA, "ACUÑA"),
                         ("Todas", "Consolidado")):
-        hojas[nombre] = ec.matriz_mensual(_filtrar(soc, cc_sel), col_v, periodos)
+        hojas[nombre] = _matriz(_filtrar(soc, cc_sel), col_v)
     for soc, nombre in ((SOC_GRAN_NATURAL, "Cuentas Gran Natural"), (SOC_ACUNA, "Cuentas ACUÑA")):
         hojas[nombre] = ec.cuentas_mensual(_filtrar(soc, cc_sel),
                                            periodos, "ppto" if col_v == "Presupuesto" else "real")
-    _tag_cc = "" if cc_sel is None else f"_{ec.etiqueta_cc(cc_sel)}"
+    _tag_cc = ("_por_CC" if por_cc else "" if cc_sel is None
+               else f"_{ec.etiqueta_cc(cc_sel)}")
     boton_excel(hojas, f"EERR_mensual_{col_v.replace('í', 'i')}_{desde}_a_{hasta}{_tag_cc}",
                 label=f"⬇ Exportar Excel mes a mes ({col_v}, por sociedad)")
 
